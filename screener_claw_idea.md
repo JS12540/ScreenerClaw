@@ -991,16 +991,17 @@ Margin of Safety: 30-40% for cyclicals (higher uncertainty, higher required disc
 #### Financial Stocks (Banks, NBFCs, Insurance)
 
 ```
-Banks and NBFCs cannot be valued on PE or EV/EBITDA.
+Banks and NBFCs cannot be valued on pe_based or ev_ebitda.
 Debt is their raw material, not a liability to be stripped out.
 
-Methods:
-  Justified P/B from RoE and growth                PRIMARY
+Methods (from registry where applicable):
+  Justified P/B from RoE and growth                PRIMARY (manual — not in generic registry)
     Formula: P/B = (RoE - g) / (CoE - g)
     If RoE > CoE then P/B > 1 is justified — high-quality banks earn this premium
-  Gordon Growth Model on dividends                  FOR MATURE STABLE BANKS
-  Excess Return Model: spread of RoE over CoE       QUALITY PREMIUM INDICATOR
-  PE as directional cross-check only
+  ddm (Gordon Growth Model on dividends)            FOR MATURE STABLE BANKS
+  Excess Return Model: spread of RoE over CoE       QUALITY PREMIUM INDICATOR (manual)
+  pe_based                                          DIRECTIONAL CROSS-CHECK only
+  reverse_dcf                                       SANITY CHECK — market pricing implied growth
 
 Key inputs for banks:
   NIM trend (Net Interest Margin)
@@ -1018,10 +1019,11 @@ Margin of Safety: 20-30% for high-quality private banks, 35-50% for PSU banks
 Long gestation periods, lumpy revenue, order-book driven earnings.
 
 Methods:
-  Order book value times typical EBITDA margin then apply EV/EBITDA
-  EV divided by Order book multiple (sector standard)
-  Long-horizon DCF (15-20 years) with higher discount rate 14-15%
-  Sum-of-parts if multiple divisions with different characteristics
+  ev_ebitda on order book × margin = forward EBITDA  PRIMARY (from registry)
+  EV divided by Order book multiple (sector standard) SECTOR SANITY CHECK
+  dcf_gurufocus with 15-20yr horizon, WACC 14-15%    LONG-HORIZON DCF
+  owner_earnings for asset-heavy infra businesses    MAINTENANCE CAPEX CHECK
+  Sum-of-parts (SOTP) if multiple divisions          MANUAL — not a registry tool
 
 Key inputs:
   Order inflow trend — the leading indicator of future revenue
@@ -1033,12 +1035,13 @@ Key inputs:
 #### Dividend Yield Stocks (Mature PSUs, Utilities, Cash-Generative Defensives)
 
 ```
-Methods:
-  Gordon Growth Model (DDM)                          PRIMARY
+Methods (from registry):
+  ddm (Gordon Growth Model)                          PRIMARY
     Price = D1 / (CoE - g)  where g = sustainable dividend growth
-  PE-based (low growth means PE is more stable and reliable)
-  Yield vs G-Sec spread normalised to 10yr G-Sec rate
-  Owner Earnings DCF (Buffett approach for mature businesses with stable capex)
+  pe_based (low growth means PE is more stable)      CONTEXT
+  Yield vs G-Sec spread normalised to 10yr G-Sec     RELATIVE VALUE CHECK
+  owner_earnings DCF (Buffett — mature stable capex) INTRINSIC VALUE FLOOR
+  peg_ratio for dividend growers with moderate PE    GROWTH QUALITY CHECK
 
 Key inputs:
   Dividend history and payout ratio sustainability
@@ -1049,13 +1052,14 @@ Key inputs:
 #### Growth Stocks (New-Age Tech, High-Growth Small Caps)
 
 ```
-Traditional PE meaningless when P/E exceeds 100 or the company is loss-making.
+Traditional pe_based meaningless when P/E exceeds 100 or the company is loss-making.
 
 Methods:
-  Revenue multiple (P/Sales) vs growth rate compared to global peers
-  Path to profitability analysis — when does unit economics reach breakeven?
-  Reverse DCF — what growth rate does current price assume? Is it achievable?
-  TAM analysis — total addressable market, penetration, market share trajectory
+  reverse_dcf — what growth rate does current price assume? Is it achievable?  PRIMARY LENS
+  Revenue multiple (P/Sales) vs growth rate vs global peers                    RELATIVE
+  Path to profitability analysis — when does unit economics reach breakeven?   QUALITATIVE
+  TAM analysis — total addressable market, penetration, market share trajectory QUALITATIVE
+  epv as a floor — what is the business worth if growth stops entirely?        DOWNSIDE FLOOR
 
 Margin of Safety: 40-50% — high uncertainty and high execution risk
 ```
