@@ -41,7 +41,6 @@ ScreenerClaw is built on the same philosophical pillars as OpenClaw:
 | Principle | What it means for ScreenerClaw |
 |-----------|-------------------------------|
 | **Business-first** | Understand the business model, moat, and macro before any number is touched |
-| **Local-first** | Portfolio, watchlists, memory, and reports live as plain files on your machine |
 | **Channel-agnostic** | WhatsApp, Telegram, Slack, CLI, Web — same brain, any interface |
 | **Self-improving** | Agents learn your investment style over time and personalise outputs |
 | **Multi-agent** | Specialised agents collaborate — no monolith |
@@ -282,14 +281,6 @@ flowchart LR
         role: "report_generation",
         workspace: "~/.screenerclaw/workspace-report",
         model: "anthropic/claude-opus-4-6",    // best model — final investor report
-      },
-      {
-        id: "alert-watcher",
-        role: "alerts",
-        workspace: "~/.screenerclaw/workspace-alerts",
-        model: "google/gemini-2.0-flash",      // fast + cheap — runs continuously
-        always_on: true,
-        skills: ["alert-engine", "nsepython"],
       },
       {
         id: "learning-agent",
