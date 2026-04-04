@@ -31,13 +31,15 @@ cd ScreenerClaw
 
 # Create virtual environment and install all dependencies
 uv venv .venv
-uv pip install -e .
 
 # Activate the venv
 # Windows
 .venv\Scripts\activate
 # macOS / Linux
 source .venv/bin/activate
+
+# This is important for command screenerclaw to work
+uv pip install -e .
 
 # Copy the example env file and fill in your API keys
 cp .env.example .env
