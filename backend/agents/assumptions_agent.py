@@ -5,13 +5,14 @@ Uses LLM to derive valuation assumptions from financial data.
 from __future__ import annotations
 
 import json
-import logging
 import re
+import time
 from typing import Any
 
 from backend.llm_client import LLMClient
+from backend.logger import get_logger
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 SYSTEM_PROMPT = """You are a senior equity research analyst specialising in Indian listed companies.
 You have deep knowledge of valuation frameworks: Graham, Greenwald EPV, DCF, PEG, and DDM.
@@ -64,17 +65,35 @@ Based on the financial data above, reason carefully and output the following JSO
   "key_assumptions_warning": ["any flags or concerns"],
 
   "valuation_methods_applicable": {{
-    "graham_number": true or false,
+    "dcf_eps": true or false,
+    "dcf_fcf": true or false,
     "graham_formula": true or false,
-    "peg": true or false,
-    "dcf": true or false,
+    "pe_based": true or false,
+    "epv": true or false,
     "ddm": true or false,
-    "greenwald_epv": true or false,
+    "reverse_dcf": true or false,
     "greenwald_growth": true or false
   }},
 
+  "sotp_segments": [],
+
   "why_methods_excluded": "explain any excluded methods"
 }}
+
+SOTP SEGMENTS SCHEMA (populate sotp_segments ONLY if stock_type == "CONGLOMERATE", else leave as []):
+Each element in sotp_segments must be:
+{{
+  "name": "string — segment name, e.g. Jio Platforms",
+  "segment_type": "string — telecom|retail|o2c|oil_gas|renewable|financial|it|fmcg|auto|infrastructure|generic",
+  "ebitda_cr": number or null,     // estimated annual EBITDA in Rs crore
+  "revenue_cr": number or null,    // annual revenue in Rs crore (use if EBITDA not available)
+  "book_value_cr": number or null, // for financial segments only
+  "stake_pct": number,             // parent company's ownership %
+  "note": "string — data source or key assumption"
+}}
+For CONGLOMERATE stock types, populate sotp_segments with best-estimate segment data from the
+financial data and web research provided. Use the business description, annual report excerpts,
+and peer data to estimate segment EBITDA. This is the PRIMARY valuation input for conglomerates.
 
 REASONING RULES:
 - Cyclical companies: use mid-cycle normalized EPS, NOT peak EPS
@@ -109,6 +128,12 @@ def _make_financial_summary(data: dict) -> str:
     profits = data.get("pl_net_profit", [])
     eps = data.get("pl_eps", [])
     opm = data.get("pl_opm_pct", [])
+
+    # Filter to only dict entries (scraped arrays sometimes contain raw floats)
+    sales = [x for x in sales if isinstance(x, dict)]
+    profits = [x for x in profits if isinstance(x, dict)]
+    eps = [x for x in eps if isinstance(x, dict)]
+    opm = [x for x in opm if isinstance(x, dict)]
 
     if sales:
         lines.append("Annual P&L (Sales, Net Profit, EPS, OPM%) [Rs Cr]:")
@@ -149,6 +174,9 @@ def _make_financial_summary(data: dict) -> str:
     reserves = bs.get("reserves", [])
     borrowings = bs.get("borrowings", [])
     equity_cap = bs.get("equity_capital", [])
+    reserves = [x for x in reserves if isinstance(x, dict)]
+    borrowings = [x for x in borrowings if isinstance(x, dict)]
+    equity_cap = [x for x in equity_cap if isinstance(x, dict)]
     if bs_years:
         latest = -1
         yr = bs_years[latest] if bs_years else "Latest"
@@ -208,6 +236,10 @@ class AssumptionsAgent:
 
     async def derive(self, raw_data: dict) -> dict[str, Any]:
         """Derive valuation assumptions from raw scraped data."""
+        t0 = time.monotonic()
+        company = raw_data.get("company_name", raw_data.get("symbol", "Company"))
+        logger.info("AssumptionsAgent starting", extra={"company": company})
+
         financial_summary = _make_financial_summary(raw_data)
         prompt = ASSUMPTIONS_PROMPT.format(financial_summary=financial_summary)
 
@@ -221,17 +253,21 @@ class AssumptionsAgent:
             )
             result = _parse_json(raw)
         except Exception as exc:
-            logger.error("Assumptions agent failed: %s", exc)
+            logger.error("AssumptionsAgent failed", extra={"company": company, "error": str(exc)})
             result = _fallback_assumptions(raw_data)
 
         # Ensure required keys exist
         result = _validate_assumptions(result, raw_data)
         logger.info(
-            "Assumptions derived: EPS=%.1f ROCE=%.1f G_base=%.1f R=%.1f",
-            result.get("normalized_eps", {}).get("value", 0),
-            result.get("normalized_roce", {}).get("value", 0),
-            result.get("growth_scenarios", {}).get("base", {}).get("g", 0),
-            result.get("required_return_r", {}).get("value", 12),
+            "AssumptionsAgent done",
+            extra={
+                "company": company,
+                "eps": result.get("normalized_eps", {}).get("value", 0),
+                "roce": result.get("normalized_roce", {}).get("value", 0),
+                "g_base": result.get("growth_scenarios", {}).get("base", {}).get("g", 0),
+                "r": result.get("required_return_r", {}).get("value", 12),
+                "elapsed_s": round(time.monotonic() - t0, 1),
+            },
         )
         return result
 
@@ -283,12 +319,13 @@ def _fallback_assumptions(data: dict) -> dict:
         "operating_cf_avg_3yr": 0,
         "key_assumptions_warning": ["Fallback assumptions — LLM call failed"],
         "valuation_methods_applicable": {
-            "graham_number": eps > 0 and bv > 0,
+            "dcf_eps": True,
+            "dcf_fcf": True,
             "graham_formula": eps > 0,
-            "peg": eps > 0,
-            "dcf": True,
+            "pe_based": eps > 0,
+            "epv": eps > 0,
             "ddm": False,
-            "greenwald_epv": eps > 0,
+            "reverse_dcf": eps > 0,
             "greenwald_growth": True,
         },
         "why_methods_excluded": "Fallback mode",
@@ -339,5 +376,6 @@ def _validate_assumptions(result: dict, data: dict) -> dict:
     result.setdefault("capex_avg_3yr", 0)
     result.setdefault("operating_cf_avg_3yr", 0)
     result.setdefault("key_assumptions_warning", [])
+    result.setdefault("sotp_segments", [])  # populated by LLM for CONGLOMERATE type only
 
     return result

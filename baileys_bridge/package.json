@@ -1,0 +1,22 @@
+{
+  "name": "screener-claw-baileys-bridge",
+  "version": "1.0.0",
+  "description": "Baileys WhatsApp bridge for ScreenerClaw",
+  "type": "module",
+  "main": "bridge.js",
+  "scripts": {
+    "start": "node bridge.js",
+    "dev": "node --watch bridge.js"
+  },
+  "dependencies": {
+    "@whiskeysockets/baileys": "^6.7.18",
+    "express": "^4.18.2",
+    "qrcode-terminal": "^0.12.0",
+    "axios": "^1.6.0",
+    "pino": "^8.21.0",
+    "pino-pretty": "^11.0.0"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}

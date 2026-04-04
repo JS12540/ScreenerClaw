@@ -1,16 +1,15 @@
 """
-Screener Investment Research Agent — FastAPI Application
-Thin API layer over the InvestmentPipeline.
+ScreenerClaw — FastAPI Application
+Thin API layer over the 5-step ScreenerClaw intelligence pipeline.
 
 Endpoints:
-  POST /api/analyze      — Main endpoint: analyze a query (single stock or screen)
-  GET  /api/health       — Health check
+  POST /api/analyze       — Main: analyse query (single stock or screen)
+  GET  /api/health        — Health check
   GET  /api/llm/providers — List available LLM providers
-  POST /api/llm/test     — Test an LLM provider
+  POST /api/llm/test      — Test an LLM provider
 """
 from __future__ import annotations
 
-import logging
 import time
 from datetime import datetime, timezone
 from typing import Optional
@@ -21,21 +20,22 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
 from backend.pipeline import get_pipeline
-from backend.llm_client import PROVIDERS, list_providers, default_model_for
+from backend.llm_client import PROVIDERS, list_providers, resolve_task_llm
 from backend.config import settings
+from backend.logger import get_logger
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s | %(levelname)-8s | %(name)s | %(message)s",
-)
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
-# ─── FastAPI app ──────────────────────────────────────────────────────────────
+# ── App ───────────────────────────────────────────────────────────────────────
 
 app = FastAPI(
-    title="Screener Investment Research Agent",
-    description="Autonomous AI agent for Indian stock analysis. Logs into Screener.in, scrapes all financial data, and produces multi-method valuation reports.",
-    version="2.0.0",
+    title="ScreenerClaw",
+    description=(
+        "AI-native Indian stock discovery and intelligence platform. "
+        "5-step pipeline: Business Understanding → Macro Analysis → "
+        "Report & Outlook → Adaptive Valuation → Composite Scoring."
+    ),
+    version="3.0.0",
     docs_url="/docs",
     redoc_url="/redoc",
 )
@@ -54,16 +54,19 @@ async def log_requests(request, call_next):
     start = time.monotonic()
     response = await call_next(request)
     elapsed_ms = (time.monotonic() - start) * 1000
-    logger.info("%s %s — %d (%.0fms)", request.method, request.url.path, response.status_code, elapsed_ms)
+    logger.info(
+        "%s %s — %d (%.0fms)",
+        request.method, request.url.path, response.status_code, elapsed_ms,
+    )
     return response
 
 
-# ─── Request models ───────────────────────────────────────────────────────────
+# ── Request Models ────────────────────────────────────────────────────────────
 
 class AnalyzeRequest(BaseModel):
     query: str
-    provider: Optional[str] = None   # Override LLM provider
-    model: Optional[str] = None      # Override LLM model
+    provider: Optional[str] = None
+    model: Optional[str] = None
 
 
 class LLMTestRequest(BaseModel):
@@ -72,14 +75,29 @@ class LLMTestRequest(BaseModel):
     prompt: str = "Say hello in one sentence."
 
 
-# ─── Startup ─────────────────────────────────────────────────────────────────
+# ── Startup / Shutdown ────────────────────────────────────────────────────────
 
 @app.on_event("startup")
 async def on_startup() -> None:
-    logger.info("=== Screener Investment Research Agent starting ===")
-    logger.info("Default LLM: provider=%s model=%s", settings.default_llm_provider, settings.default_llm_model or default_model_for(settings.default_llm_provider))
-    logger.info("Screener credentials: %s", "configured" if settings.screener_username else "NOT configured (guest mode)")
-    # Pre-warm the pipeline
+    reasoning_provider, reasoning_model = resolve_task_llm("reasoning")
+    execution_provider, execution_model = resolve_task_llm("execution")
+    fast_provider, fast_model = resolve_task_llm("fast")
+
+    logger.info("=== ScreenerClaw v3.0 starting ===")
+    logger.info("Reasoning LLM: %s/%s", reasoning_provider, reasoning_model)
+    logger.info("Execution LLM: %s/%s", execution_provider, execution_model)
+    logger.info("Fast LLM: %s/%s", fast_provider, fast_model)
+    search_backends = []
+    if settings.openai_api_key:
+        search_backends.append("OpenAI")
+    if settings.groq_api_key:
+        search_backends.append("Groq")
+    search_backends.append("DuckDuckGo")
+    logger.info("Web search backends: %s", " + ".join(search_backends))
+    logger.info(
+        "Screener.in: %s",
+        "configured" if settings.screener_username else "guest mode",
+    )
     get_pipeline()
 
 
@@ -87,17 +105,18 @@ async def on_startup() -> None:
 async def on_shutdown() -> None:
     from backend.screener.auth import close_session
     await close_session()
-    logger.info("Agent shutdown.")
+    logger.info("ScreenerClaw shutdown.")
 
 
-# ─── POST /api/analyze ───────────────────────────────────────────────────────
+# ── POST /api/analyze ─────────────────────────────────────────────────────────
 
 @app.post("/api/analyze")
 async def analyze(request: AnalyzeRequest) -> JSONResponse:
     """
-    Main endpoint. Accepts a natural-language query:
-    - "Analyse TCS" → full 8-phase investment report
-    - "Find low PE IT companies" → screening results
+    Main endpoint. Accepts any natural-language query:
+    - "Analyse TCS" → full 5-step intelligence report
+    - "Find undervalued pharma midcaps" → screened + scored list
+    - "Best compounders in FMCG" → themed screening
 
     Optional: override provider/model for this request.
     """
@@ -118,23 +137,22 @@ async def analyze(request: AnalyzeRequest) -> JSONResponse:
     return JSONResponse(content=result)
 
 
-# ─── GET /api/health ─────────────────────────────────────────────────────────
+# ── GET /api/health ───────────────────────────────────────────────────────────
 
 @app.get("/api/health")
 async def health_check() -> JSONResponse:
-    provider = settings.default_llm_provider
-    model = settings.default_llm_model or default_model_for(provider)
+    reasoning_provider, reasoning_model = resolve_task_llm("reasoning")
     return JSONResponse(content={
         "status": "ok",
+        "version": "3.0.0",
         "timestamp": datetime.now(timezone.utc).isoformat(),
-        "version": "2.0.0",
-        "default_provider": provider,
-        "default_model": model,
+        "reasoning_llm": f"{reasoning_provider}/{reasoning_model}",
+        "web_search": "openai+groq+duckduckgo",
         "screener_credentials": bool(settings.screener_username),
     })
 
 
-# ─── GET /api/llm/providers ──────────────────────────────────────────────────
+# ── GET /api/llm/providers ────────────────────────────────────────────────────
 
 @app.get("/api/llm/providers")
 async def get_llm_providers() -> JSONResponse:
@@ -146,20 +164,23 @@ async def get_llm_providers() -> JSONResponse:
     providers = list_providers()
     for p in providers:
         p["configured"] = configured.get(p["id"], False)
-        p["is_default"] = p["id"] == settings.default_llm_provider
+
+    reasoning_p, reasoning_m = resolve_task_llm("reasoning")
+    execution_p, execution_m = resolve_task_llm("execution")
 
     return JSONResponse(content={
         "providers": providers,
-        "default_provider": settings.default_llm_provider,
-        "default_model": settings.default_llm_model or default_model_for(settings.default_llm_provider),
+        "routing": {
+            "reasoning": f"{reasoning_p}/{reasoning_m}",
+            "execution": f"{execution_p}/{execution_m}",
+        },
     })
 
 
-# ─── POST /api/llm/test ──────────────────────────────────────────────────────
+# ── POST /api/llm/test ────────────────────────────────────────────────────────
 
 @app.post("/api/llm/test")
 async def test_llm(request: LLMTestRequest) -> JSONResponse:
-    """Test an LLM provider with a simple prompt."""
     from backend.llm_client import LLMClient
 
     if request.provider not in PROVIDERS:
@@ -178,6 +199,7 @@ async def test_llm(request: LLMTestRequest) -> JSONResponse:
         return JSONResponse(content={
             "provider": request.provider,
             "model": client.model,
+            "is_reasoning_model": client.is_reasoning,
             "response": response,
             "latency_ms": round((time.monotonic() - t0) * 1000, 1),
             "status": "ok",

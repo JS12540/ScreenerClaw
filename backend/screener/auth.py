@@ -5,15 +5,15 @@ Maintains a persistent authenticated session for all subsequent requests.
 """
 from __future__ import annotations
 
-import logging
 from typing import Optional
 
 import httpx
 from bs4 import BeautifulSoup
 
 from backend.config import settings
+from backend.logger import get_logger
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 LOGIN_URL = "https://www.screener.in/login/"
 BASE_HEADERS = {
@@ -57,7 +57,7 @@ class ScreenerAuth:
         password = settings.screener_password
 
         if not username or not password:
-            logger.warning("SCREENER_USERNAME/PASSWORD not set — using guest mode (limited data)")
+            logger.warning("Screener.in credentials not set — guest mode", extra={"mode": "guest"})
             self._logged_in = True
             return
 
@@ -89,13 +89,14 @@ class ScreenerAuth:
         if "login" in str(login_resp.url).lower() and login_resp.status_code == 200:
             # Still on login page → failed
             logger.error(
-                "Screener.in login FAILED for user=%s — check credentials", username
+                "Screener.in login failed",
+                extra={"username": username, "reason": "still on login page"},
             )
             self._logged_in = True  # continue in guest mode
             return
 
         self._logged_in = True
-        logger.info("Successfully logged into Screener.in as %s", username)
+        logger.info("Screener.in login successful", extra={"username": username})
 
     async def close(self) -> None:
         if self._client:

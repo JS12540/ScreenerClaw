@@ -5,13 +5,14 @@ Synthesises valuations + business analysis into final investment verdict.
 from __future__ import annotations
 
 import json
-import logging
 import re
+import time
 from typing import Any
 
 from backend.llm_client import LLMClient
+from backend.logger import get_logger
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 SYSTEM_PROMPT = """You are a senior investment analyst synthesising a final investment verdict.
 Respond ONLY with valid JSON. No markdown, no preamble."""
@@ -167,6 +168,8 @@ class VerdictAgent:
             y=y,
         )
 
+        t0 = time.monotonic()
+        logger.info("VerdictAgent starting", extra={"company": company_name, "ticker": ticker})
         try:
             raw = await self.llm.complete(
                 messages=[{"role": "user", "content": prompt}],
@@ -176,8 +179,12 @@ class VerdictAgent:
                 json_mode=True,
             )
             result = _parse_json(raw)
+            logger.info(
+                "VerdictAgent done",
+                extra={"company": company_name, "elapsed_s": round(time.monotonic() - t0, 1)},
+            )
         except Exception as exc:
-            logger.error("Verdict agent failed: %s", exc)
+            logger.error("VerdictAgent failed", extra={"company": company_name, "error": str(exc)})
             result = _fallback_verdict(current_price, valuation_table)
 
         # Ensure defaults

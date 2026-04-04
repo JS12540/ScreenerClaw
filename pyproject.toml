@@ -1,0 +1,48 @@
+[project]
+name = "screener-claw"
+version = "3.0.0"
+description = "AI-native Indian stock intelligence platform with multi-channel support"
+requires-python = ">=3.11"
+dependencies = [
+    "fastapi>=0.109.0",
+    "uvicorn[standard]>=0.27.0",
+    "pydantic>=2.5.3",
+    "pydantic-settings>=2.1.0",
+    # LLM Providers
+    "anthropic>=0.40.0",
+    "openai>=1.30.0",
+    "groq>=0.4.2",
+    # Web Search
+    "ddgs>=9.0.0",
+    # Data / Scraping
+    "requests>=2.31.0",
+    "beautifulsoup4>=4.12.3",
+    "lxml>=5.1.0",
+    "httpx>=0.26.0",
+    "yfinance>=0.2.36",
+    # PDF generation
+    "reportlab>=4.0.0",
+    "pillow>=10.0.0",
+    # Channels
+    "python-telegram-bot>=20.0",
+    "slack-bolt>=1.18.0",
+    "discord.py>=2.3.2",
+    "rich>=13.0.0",
+    # Utilities
+    "python-dotenv>=1.0.0",
+    "tenacity>=8.2.3",
+    "python-multipart>=0.0.6",
+    "aiofiles>=23.2.1",
+]
+
+[project.scripts]
+screenerclaw = "cli:main"
+
+[tool.setuptools.packages.find]
+include = ["backend*", "agent_skills*"]
+
+[tool.setuptools]
+py-modules = ["cli", "run_bot", "run_backend"]
+
+[tool.uv]
+dev-dependencies = []

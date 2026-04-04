@@ -16,14 +16,14 @@ Sections extracted:
 """
 from __future__ import annotations
 
-import logging
 import re
 from typing import Any, Optional
 
 import httpx
 from bs4 import BeautifulSoup, Tag
+from backend.logger import get_logger
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 SCREENER_BASE = "https://www.screener.in"
 COMPANY_URL = f"{SCREENER_BASE}/company/{{symbol}}/consolidated/"

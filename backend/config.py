@@ -1,6 +1,9 @@
 """
-Screener Investment Research Agent — Configuration
+ScreenerClaw — Configuration
+All app settings, India-specific valuation parameters, and LLM routing.
 """
+from __future__ import annotations
+
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -12,52 +15,239 @@ class Settings(BaseSettings):
         extra="ignore",
     )
 
-    # --- LLM providers ---
+    # ── LLM API keys ──────────────────────────────────────────────────────────
     anthropic_api_key: str = ""
     openai_api_key: str = ""
     groq_api_key: str = ""
-    # Default: groq with llama model
-    default_llm_provider: str = "groq"
-    default_llm_model: str = "llama-3.3-70b-versatile"
 
-    # --- App ---
+    # ── Channel tokens ────────────────────────────────────────────────────────
+    telegram_bot_token: str = ""
+    slack_bot_token: str = ""
+    slack_signing_secret: str = ""
+    slack_app_token: str = ""   # for socket mode (xapp-...)
+    discord_bot_token: str = ""
+
+    # ── WhatsApp (Baileys bridge) ─────────────────────────────────────────────
+    # No token needed — authenticate via QR code scan on first run.
+    whatsapp_bridge_port: int = 3000    # Node.js Baileys bridge HTTP port
+    whatsapp_webhook_port: int = 8080   # Python webhook receiver port
+
+    # ── LLM routing: task-type based model selection ─────────────────────────
+    # reasoning: deep analysis, valuation, reports (gpt-5-mini)
+    reasoning_provider: str = "openai"
+    reasoning_model: str = "gpt-5-mini"
+
+    # execution: data fetch, classification, quick tasks (gpt-4.1-mini)
+    execution_provider: str = "openai"
+    execution_model: str = "gpt-4.1-mini"
+
+    # fast: intent routing, alerts, short responses (groq)
+    fast_provider: str = "groq"
+    fast_model: str = "llama-3.3-70b-versatile"
+
+    # ── Legacy defaults (kept for backwards compat) ───────────────────────────
+    default_llm_provider: str = ""
+    default_llm_model: str = ""
+
+    # ── Screener.in ───────────────────────────────────────────────────────────
+    screener_base_url: str = "https://www.screener.in"
+    screener_username: str = ""
+    screener_password: str = ""
+
+    # ── App ───────────────────────────────────────────────────────────────────
     environment: str = "development"
     log_level: str = "INFO"
-
-    # --- Screener.in credentials ---
-    screener_base_url: str = "https://www.screener.in"
-    screener_username: str = ""   # Screener.in login email
-    screener_password: str = ""   # Screener.in login password
-
-    # --- Request settings ---
     request_timeout: int = 30
 
 
 settings = Settings()
 
-# India risk-free rate (10-year G-Sec yield approximation)
-INDIA_RISK_FREE_RATE = 0.07  # 7%
-EQUITY_RISK_PREMIUM = 0.06   # 6%
-DEFAULT_DISCOUNT_RATE = 0.13  # 13% (risk-free + ERP)
-TERMINAL_GROWTH_RATE = 0.04  # 4%
-DCF_GROWTH_STAGE_YEARS = 10
-DCF_TERMINAL_STAGE_YEARS = 10
-DCF_MIN_GROWTH_RATE = 0.05   # 5%
-DCF_MAX_GROWTH_RATE = 0.20   # 20%
+# ─── India Valuation Parameters ───────────────────────────────────────────────
 
-# Market cap buckets (in crores INR)
-MARKET_CAP_LARGE = 20000      # > 20,000 cr = Large cap
-MARKET_CAP_MID = 5000         # 5,000 - 20,000 cr = Mid cap
-MARKET_CAP_SMALL = 500        # 500 - 5,000 cr = Small cap
-# < 500 cr = Micro cap
+INDIA_PARAMS = {
+    "risk_free_rate":           0.070,   # 10yr G-Sec yield
+    "equity_risk_premium":      0.060,   # Damodaran India ERP
+    "default_wacc":             0.130,
+    "terminal_growth_real":     0.040,   # India long-run real GDP
+    "terminal_growth_nominal":  0.060,   # 4% real + 2% inflation
+    "aaa_bond_yield":           0.075,   # For Graham Formula denominator
 
-# Sector synonyms mapping
+    "sector_wacc": {
+        "Private Banking":       0.115,
+        "FMCG":                  0.110,
+        "IT Services":           0.120,
+        "Pharmaceuticals":       0.130,
+        "Specialty Chemicals":   0.135,
+        "Capital Goods":         0.135,
+        "Infrastructure":        0.145,
+        "Metals & Mining":       0.150,
+        "Real Estate":           0.155,
+        "default":               0.130,
+    },
+
+    "sector_margin_of_safety": {
+        "FMCG":                  0.20,
+        "IT Services":           0.20,
+        "Private Banking":       0.25,
+        "Pharmaceuticals":       0.25,
+        "Specialty Chemicals":   0.30,
+        "Cyclicals":             0.35,
+        "PSU Banks":             0.40,
+        "Infrastructure":        0.30,
+        "default":               0.25,
+    },
+}
+
+# ─── Stock Type Definitions ───────────────────────────────────────────────────
+
+STOCK_TYPES = {
+    "QUALITY_COMPOUNDER":  [
+        "Pharmaceuticals", "FMCG", "Specialty Chemicals", "IT Services",
+        "Consumer Brands", "Consumer Goods",
+    ],
+    "CYCLICAL":            [
+        "Metals & Mining", "Cement", "Commodity Chemicals",
+        "Capital Goods", "Textile",
+    ],
+    "FINANCIAL":           [
+        "Banks", "Private Banking", "PSU Banks", "NBFCs",
+        "Financial Services", "Insurance",
+    ],
+    "INFRASTRUCTURE":      [
+        "Infrastructure", "Roads", "Power", "Defence", "Railways",
+    ],
+    "REAL_ASSET":          ["Real Estate", "Hospitality", "Media"],
+    "GROWTH":              ["Technology", "E-Commerce", "SaaS"],
+    "DIVIDEND_YIELD":      ["Utilities", "Oil & Gas"],
+    "CONGLOMERATE":        [
+        "Conglomerate", "Diversified", "Holding Company",
+    ],
+}
+
+# Valuation methods recommended per stock type
+VALUATION_METHODS_BY_TYPE = {
+    "QUALITY_COMPOUNDER": [
+        "greenwald_growth", "dcf_eps", "dcf_fcf", "epv", "pe_based", "reverse_dcf",
+    ],
+    "CYCLICAL": [
+        "graham_formula", "pe_based", "reverse_dcf", "dcf_eps",
+    ],
+    "FINANCIAL": [
+        "pb_roe", "ddm", "pe_based", "reverse_dcf",
+    ],
+    "INFRASTRUCTURE": [
+        "dcf_fcf", "epv", "reverse_dcf", "pe_based",
+    ],
+    "REAL_ASSET": [
+        "pe_based", "graham_formula", "reverse_dcf", "dcf_fcf",
+    ],
+    "GROWTH": [
+        "greenwald_growth", "reverse_dcf", "pe_based", "epv",
+    ],
+    "DIVIDEND_YIELD": [
+        "ddm", "pe_based", "dcf_eps", "reverse_dcf",
+    ],
+    "CONGLOMERATE": [
+        "sotp",        # Sum of Parts — PRIMARY method for conglomerates
+        "reverse_dcf", # What growth is priced in?
+    ],
+    "UNKNOWN": [
+        "dcf_eps", "graham_formula", "pe_based", "reverse_dcf",
+    ],
+}
+
+# ─── India Macro Factor Taxonomy ──────────────────────────────────────────────
+
+INDIA_MACRO_FACTORS = [
+    "RBI Rate Cycle",
+    "INR/USD Rate",
+    "CPI/WPI Inflation",
+    "Monsoon and Rural Demand",
+    "Government Capex and PLI",
+    "GST Collections",
+    "Credit Growth",
+    "Real Estate Cycle",
+    "Crude Oil Price",
+]
+
+GEOPOLITICAL_FACTORS = [
+    "China+1 Manufacturing Shift",
+    "US Tariffs and Trade Policy",
+    "Middle East Conflict and Shipping",
+    "Russia-Ukraine and European Demand",
+    "China Competition",
+    "US FDA and EU Regulatory",
+]
+
+# ─── Scoring Weights ──────────────────────────────────────────────────────────
+
+DEFAULT_SCORE_WEIGHTS = {
+    "business_quality": 0.20,
+    "growth_past":      0.10,
+    "growth_forward":   0.20,
+    "valuation":        0.30,
+    "financial_health": 0.10,
+    "business_outlook": 0.10,
+}
+
+# Per stock-type overrides for score weights (valuation weight boosted where method is definitive)
+STOCK_TYPE_SCORE_WEIGHTS: dict[str, dict] = {
+    # For conglomerates, SOTP is the most reliable method — raise valuation weight to 35%
+    "CONGLOMERATE": {
+        "business_quality": 0.20,
+        "growth_past":      0.05,
+        "growth_forward":   0.15,
+        "valuation":        0.35,   # SOTP is primary and most reliable
+        "financial_health": 0.10,
+        "business_outlook": 0.15,
+    },
+}
+
+INTENT_SCORE_WEIGHTS = {
+    "undervalued": {
+        "business_quality": 0.20, "growth_past": 0.10, "growth_forward": 0.15,
+        "valuation": 0.35, "financial_health": 0.10, "business_outlook": 0.10,
+    },
+    "growth": {
+        "business_quality": 0.20, "growth_past": 0.20, "growth_forward": 0.35,
+        "valuation": 0.10, "financial_health": 0.05, "business_outlook": 0.10,
+    },
+    "quality": {
+        "business_quality": 0.40, "growth_past": 0.15, "growth_forward": 0.15,
+        "valuation": 0.10, "financial_health": 0.10, "business_outlook": 0.10,
+    },
+    "compounder": {
+        "business_quality": 0.30, "growth_past": 0.20, "growth_forward": 0.20,
+        "valuation": 0.10, "financial_health": 0.05, "business_outlook": 0.15,
+    },
+    "dividend": {
+        "business_quality": 0.20, "growth_past": 0.10, "growth_forward": 0.10,
+        "valuation": 0.25, "financial_health": 0.20, "business_outlook": 0.15,
+    },
+}
+
+SCORE_VERDICT = {
+    75: ("STRONG BUY", "🟢"),
+    60: ("BUY", "🔵"),
+    50: ("WATCHLIST", "🟡"),
+    40: ("NEUTRAL", "⚪"),
+    0:  ("AVOID", "🔴"),
+}
+
+# ─── Market Cap Buckets (INR Crores) ──────────────────────────────────────────
+
+MARKET_CAP_LARGE = 20000
+MARKET_CAP_MID   = 5000
+MARKET_CAP_SMALL = 500
+
+# ─── Sector Synonyms ──────────────────────────────────────────────────────────
+
 SECTOR_SYNONYMS = {
     "it": "Information Technology",
     "tech": "Information Technology",
     "technology": "Information Technology",
     "software": "Information Technology",
-    "it services": "Information Technology",
+    "it services": "IT Services",
     "pharma": "Pharmaceuticals",
     "pharmaceutical": "Pharmaceuticals",
     "healthcare": "Healthcare",
@@ -86,9 +276,8 @@ SECTOR_SYNONYMS = {
     "steel": "Metals & Mining",
     "metals": "Metals & Mining",
     "mining": "Metals & Mining",
-    "chemicals": "Chemicals",
-    "speciality chemicals": "Chemicals",
-    "specialty chemicals": "Chemicals",
+    "chemicals": "Specialty Chemicals",
+    "specialty chemicals": "Specialty Chemicals",
     "agro": "Agriculture",
     "agriculture": "Agriculture",
     "fertilizer": "Agriculture",
@@ -100,15 +289,10 @@ SECTOR_SYNONYMS = {
     "renewable": "Power",
     "solar": "Power",
     "telecom": "Telecom",
-    "telecommunication": "Telecom",
     "media": "Media & Entertainment",
-    "entertainment": "Media & Entertainment",
     "aviation": "Aviation",
-    "airlines": "Aviation",
     "logistics": "Logistics",
-    "shipping": "Logistics",
     "railway": "Railways",
-    "rail": "Railways",
     "defense": "Defence",
     "defence": "Defence",
     "psu": "PSU",
@@ -118,58 +302,8 @@ SECTOR_SYNONYMS = {
     "paints": "Paints",
 }
 
-# Theme-based queries mapping
-THEME_MAPPINGS = {
-    "compounders": {"roce_min": 15, "profit_cagr_min": 12, "debt_to_equity_max": 1.0},
-    "undervalued": {"pe_percentile_max": 40, "pb_percentile_max": 40},
-    "growth": {"revenue_cagr_min": 15, "profit_cagr_min": 15},
-    "quality": {"roce_min": 20, "roe_min": 15, "debt_to_equity_max": 0.5},
-    "dividend": {"dividend_yield_min": 2.0},
-    "low debt": {"debt_to_equity_max": 0.3},
-    "high cash flow": {"fcf_positive": True},
-    "turnaround": {"profit_growth_yoy_min": 20},
-    "defensive": {"beta_max": 0.8, "debt_to_equity_max": 0.5},
-}
+# ─── HTTP Headers ─────────────────────────────────────────────────────────────
 
-# NSE sector index mapping
-NSE_SECTOR_INDICES = {
-    "Information Technology": "NIFTY IT",
-    "Banks": "NIFTY BANK",
-    "Financial Services": "NIFTY FINANCIAL SERVICES",
-    "Pharmaceuticals": "NIFTY PHARMA",
-    "FMCG": "NIFTY FMCG",
-    "Energy": "NIFTY ENERGY",
-    "Automobile": "NIFTY AUTO",
-    "Metals & Mining": "NIFTY METAL",
-    "Real Estate": "NIFTY REALTY",
-    "Infrastructure": "NIFTY INFRA",
-    "Media & Entertainment": "NIFTY MEDIA",
-    "Healthcare": "NIFTY HEALTHCARE",
-    "Chemicals": "NIFTY CHEMICALS",
-    "Capital Goods": "NIFTY CAPITAL MARKETS",
-    "PSU": "NIFTY PSE",
-}
-
-# Scoring weights
-SCORE_WEIGHTS = {
-    "quality": 0.30,
-    "growth": 0.25,
-    "valuation": 0.20,
-    "financial_health": 0.15,
-    "consistency": 0.10,
-}
-
-# Intent-based weight overrides
-INTENT_WEIGHTS = {
-    "undervalued": {"quality": 0.20, "growth": 0.15, "valuation": 0.40, "financial_health": 0.15, "consistency": 0.10},
-    "growth": {"quality": 0.20, "growth": 0.45, "valuation": 0.15, "financial_health": 0.10, "consistency": 0.10},
-    "quality": {"quality": 0.45, "growth": 0.20, "valuation": 0.15, "financial_health": 0.10, "consistency": 0.10},
-    "compounder": {"quality": 0.30, "growth": 0.30, "valuation": 0.15, "financial_health": 0.10, "consistency": 0.15},
-    "dividend": {"quality": 0.25, "growth": 0.10, "valuation": 0.30, "financial_health": 0.20, "consistency": 0.15},
-    "defensive": {"quality": 0.35, "growth": 0.10, "valuation": 0.25, "financial_health": 0.20, "consistency": 0.10},
-}
-
-# Request headers for web scraping
 HEADERS = {
     "User-Agent": (
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
@@ -180,16 +314,4 @@ HEADERS = {
     "Accept-Language": "en-US,en;q=0.5",
     "Accept-Encoding": "gzip, deflate",
     "Connection": "keep-alive",
-}
-
-NSE_HEADERS = {
-    "User-Agent": (
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-        "AppleWebKit/537.36 (KHTML, like Gecko) "
-        "Chrome/120.0.0.0 Safari/537.36"
-    ),
-    "Accept": "*/*",
-    "Accept-Language": "en-US,en;q=0.9",
-    "Accept-Encoding": "gzip, deflate, br",
-    "Referer": "https://www.nseindia.com/",
 }
