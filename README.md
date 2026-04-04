@@ -9,6 +9,10 @@ The platform is **self-improving**: every analysis writes learnings (moat assess
 
 ---
 
+## Architecture
+
+![ScreenerClaw architecture](screenerclaw_architecture.svg)
+
 ## Quick Start
 
 ### Prerequisites
