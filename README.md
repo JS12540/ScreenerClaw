@@ -79,14 +79,90 @@ screenerclaw api
 
 > `gpt-5-mini` is a reasoning model — `max_completion_tokens` covers thinking + output tokens, keep it high (6000–8000). `json_mode` is not applied for reasoning models.
 
-### Web Search
+### Stock Universe Cache
 
-Priority order:
-1. **DuckDuckGo** (`ddgs`) — always active, no API key needed, India-focused queries
-2. **Groq Compound** — `compound-beta-mini` (requires `GROQ_API_KEY`, fails gracefully)
-3. ~~OpenAI Responses API~~ — disabled (uncomment in `web_search.py` to re-enable)
+At startup, ScreenerClaw downloads the complete NSE and BSE equity listings and saves them locally:
 
-All queries are India-specific with quoted company names and site filters (`screener.in`, `bseindia.com`, `moneycontrol.com`).
+| File | Source | Contents |
+|------|--------|----------|
+| `data/nse_stocks.json` | NSE `EQUITY_L.csv` | ~2000+ EQ-series stocks: symbol, name, ISIN |
+| `data/bse_stocks.json` | BSE equity API | BSE scrip codes, names, ISIN (best-effort) |
+
+Cache refreshes automatically every 24 hours. Downloads run in the background at startup — does not block bot or API startup.
+
+**Why this matters:** Without the universe cache, the LLM query router sometimes abbreviates company names (e.g. "arrowgreentech" → "AGT"). The universe search catches this by fuzzy-matching the full company name against all NSE listings and returning the correct symbol (e.g. `ARROWGREEN`).
+
+**Matching strategy (in priority order):**
+1. Exact NSE symbol match (`HDFCBANK` → `HDFCBANK`)
+2. Space-collapsed exact match (`arrowgreentech` == `arrow greentech` → `ARROWGREEN`)
+3. Normalized exact match
+4. All query words found in company name (`tata consultancy` → `TCS`)
+5. Name starts with query prefix
+6. difflib fuzzy match (≥ 0.72 ratio, query ≥ 6 chars)
+
+Short LLM-guessed abbreviations like `AGT` or `RELIND` that don't hit threshold fall through to Screener.in search automatically.
+
+---
+
+### Web Search — Smart Query Generation
+
+Web research uses a **two-phase approach** instead of hardcoded templates.
+
+#### Phase 1 — Query Generation
+
+Before any web search runs, `QueryGeneratorAgent` reads the Screener.in data and uses the execution LLM to generate **factual, company-specific search queries**.
+
+Runs **once per stock**. Output shared by `BusinessAgent` (Step 1) and `MacroAgent` (Step 2).
+
+| Query Set | Count | What it searches for |
+|-----------|-------|----------------------|
+| `business_queries` | 6 | Products & revenue mix, competitor market share, promoter/SEBI facts, customer/contract facts, raw material prices, one sector-specific mandatory query |
+| `macro_queries` | 4 | Government policy, input cost prices, end-market demand, global trade/import competition — all sector-specific |
+| `news_queries` | 2 | Recent quarterly results, analyst downgrades |
+
+**Sector-specific mandatory query (Query 6):**
+| Sector flag | What gets searched |
+|-------------|-------------------|
+| Pharma | Drug name + patent expiry + ANDA + FDA approval year |
+| IT/Tech | Client attrition + deal wins + H1B visa + offshore delivery |
+| Chemicals | Chemical name + China anti-dumping duty + India 2024 |
+| FMCG | Brand name + Nielsen market share + retail distribution |
+| Export-heavy | Export USD/EUR + buyer country + FX receivables |
+
+If the LLM call fails → falls back to the old hardcoded templates automatically.
+
+**Core query rule — GOOD vs BAD:**
+
+The prompt explicitly teaches the LLM to generate **factual keyword queries** (specific nouns: product names, peer names, raw material names, regulator names, fiscal years) — not analytical meta-queries. It shows concrete examples using the actual company name:
+
+```
+BAD — returns nothing useful:
+  "Arrow Greentech SWOT analysis vulnerabilities"
+  "Arrow Greentech structural risks red flags"
+  "India Chemicals sector macro headwinds tailwinds"
+
+GOOD — returns real articles and data:
+  "Arrow Greentech PVC compound masterbatch revenue FY2024 annual report"
+  "Arrow Greentech vs Plastiblends India plastic additives market share 2024"
+  "Arrow Greentech promoter SEBI pledge shareholding change 2024"
+  "Arrow Greentech PVC compound China anti-dumping duty India 2024"
+  "naphtha ethylene price India 2025 petrochemical import Arrow Greentech"
+  "Arrow Greentech Q3 FY2025 earnings results concall management"
+```
+
+#### Phase 2 — Web Search Execution
+
+Generated queries run in parallel across all available backends:
+
+| Backend | Requires | Concurrency | Notes |
+|---------|----------|-------------|-------|
+| **DuckDuckGo** (`ddgs`) | Nothing | Max 2 concurrent (semaphore) | Always active; retries once on empty result |
+| **Groq Compound** (`compound-beta-mini`) | `GROQ_API_KEY` | Unlimited | Built-in web search, fails gracefully |
+| ~~OpenAI Responses API~~ | `OPENAI_API_KEY` | — | Disabled — uncomment in `web_search.py` to re-enable |
+
+**DuckDuckGo rate-limit protection:** A semaphore limits DDG to 2 concurrent requests. When 6 queries run at once, the remaining 4 queue and run as slots free. Each query retries once (with a 1s delay) if DDG returns an empty result. This prevents the silent empty-results failure that caused downstream LLM report generation to fail.
+
+Results from all backends and all queries are merged, deduplicated, and passed to the analysis LLMs as search context.
 
 ### Valuation Methods (9)
 
@@ -245,6 +321,8 @@ agent_skills/
 │   └── SKILL.md      ← Macro agent system prompt + instructions (editable)
 ├── report_agent/
 │   └── SKILL.md      ← Report agent system prompt + instructions (editable)
+├── query_generator/
+│   └── SKILL.md      ← Query generator system prompt + sector rules (editable)
 ├── verdict_agent/
 │   └── SKILL.md      ← Verdict/buy-range agent instructions (editable)
 ├── valuation/
@@ -276,13 +354,18 @@ Analysis request
        ↓
 Read relevant memory (sector + company files)
        ↓
-5-step pipeline runs with prior context loaded
+QueryGeneratorAgent — LLM reads Screener data + memory → generates
+  6 targeted business queries + 4 sector-specific macro queries + 2 news queries
+       ↓
+Steps 1+2 run in parallel using generated queries (not hardcoded templates)
+       ↓
+Steps 3-5 complete (report, valuation, scoring, verdict)
        ↓
 Pipeline completes → extract_and_save_learnings()
        ↓
 Sector .md + Company .md updated with new observations
        ↓
-Next analysis for same ticker/sector is smarter
+Next analysis: memory loaded → better queries → deeper research
 ```
 
 ---
@@ -417,16 +500,26 @@ Infossys analysis
 Check Relaince
 What about HDFC bank?
 
+# Less-known / mid/small-cap (resolved via NSE universe cache)
+Analyse Arrowgreentech
+Analyse Manyavar
+Check Delhivery
+What about Latent View
+
 # Natural language
 What is the intrinsic value of Infosys?
 Should I buy Maruti Suzuki?
 ```
 
 **Smart ticker resolution order:**
-1. Known alias lookup (~80 blue-chips with name variants)
-2. Direct symbol detection (NSE format or 6-digit BSE code)
-3. Screener.in autocomplete API search
-4. DuckDuckGo fallback (extracts `NSE: TICKER` from search results)
+1. Known alias lookup (~80 blue-chips with name/misspelling variants)
+2. **Local NSE + BSE universe search** — full listing downloaded at startup, cached 24h
+3. BSE 6-digit code → Screener.in search
+4. Verified direct symbol — only accepted if confirmed present in NSE universe
+5. Screener.in autocomplete API search
+6. DuckDuckGo fallback (extracts `NSE: TICKER` from search results)
+
+> **Why step 2 matters:** The LLM query router sometimes abbreviates unfamiliar company names (e.g. "arrowgreentech" → "AGT"). The local universe search catches this by fuzzy-matching the full company name against the complete NSE listing, returning the correct symbol (`ARROWGREEN`). Without this, AGT would be sent to Screener.in and either find the wrong company or fail silently.
 
 ### Screening
 
@@ -503,6 +596,7 @@ screener_agent/
 │   ├── business_agent/SKILL.md     # Business agent system prompt (editable)
 │   ├── macro_agent/SKILL.md        # Macro agent system prompt (editable)
 │   ├── report_agent/SKILL.md       # Report agent system prompt (editable)
+│   ├── query_generator/SKILL.md    # Query generator rules + sector overrides (editable)
 │   ├── verdict_agent/SKILL.md      # Verdict agent instructions (editable)
 │   ├── valuation/SKILL.md          # All 9 valuation methods + India params
 │   └── memory/
@@ -511,8 +605,9 @@ screener_agent/
 │       └── market/observations.md  # Market cycle observations
 ├── backend/
 │   ├── agents/
-│   │   ├── business_agent.py       # Step 1: loads prompt from SKILL.md
-│   │   ├── macro_agent.py          # Step 2: loads prompt from SKILL.md
+│   │   ├── query_generator.py      # Pre-step: LLM generates company-specific search queries
+│   │   ├── business_agent.py       # Step 1: uses generated queries, loads prompt from SKILL.md
+│   │   ├── macro_agent.py          # Step 2: uses generated queries, loads prompt from SKILL.md
 │   │   ├── report_agent.py         # Step 3: loads prompt from SKILL.md
 │   │   ├── assumptions_agent.py    # Step 4: derives valuation assumptions + SOTP segments
 │   │   ├── verdict_agent.py        # Buy ranges (price_from / price_to keys)
@@ -533,7 +628,8 @@ screener_agent/
 │   │   ├── filter_scraper.py       # Filter/screen endpoint + HTML parser
 │   │   ├── screener_filters.py     # All 302 Screener.in filter constants + templates
 │   │   ├── result_formatter.py     # Screening result text table formatter
-│   │   └── ticker_resolver.py      # Smart ticker resolution (4-stage)
+│   │   ├── stock_universe.py       # NSE + BSE universe cache (downloaded at startup, 24h TTL)
+│   │   └── ticker_resolver.py      # Smart ticker resolution (6-stage, uses universe)
 │   ├── valuation/
 │   │   ├── classifier.py           # Stock type classifier (incl. CONGLOMERATE)
 │   │   └── engine.py               # 9 valuation methods (incl. SOTP + Greenwald)
@@ -546,6 +642,9 @@ screener_agent/
 │   ├── pipeline.py                 # 5-step pipeline + memory write on completion
 │   ├── report_builder.py           # Markdown report builder + SOTP breakdown
 │   └── session_manager.py          # Per-user session state (15-min TTL)
+├── data/                           # Auto-generated stock universe cache (gitignored)
+│   ├── nse_stocks.json             # ~2000+ NSE EQ-series stocks (refreshed every 24h)
+│   └── bse_stocks.json             # BSE equity listings (best-effort)
 ├── baileys_bridge/
 │   ├── bridge.js                   # Baileys Node.js bridge + Bad MAC auto-recovery
 │   ├── package.json
