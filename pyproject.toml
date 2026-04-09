@@ -8,31 +8,24 @@ dependencies = [
     "uvicorn[standard]>=0.27.0",
     "pydantic>=2.5.3",
     "pydantic-settings>=2.1.0",
-    # LLM Providers
     "anthropic>=0.40.0",
     "openai>=1.30.0",
     "groq>=0.4.2",
-    # Web Search
     "ddgs>=9.0.0",
-    # Data / Scraping
     "requests>=2.31.0",
     "beautifulsoup4>=4.12.3",
     "lxml>=5.1.0",
     "httpx>=0.26.0",
     "yfinance>=0.2.36",
-    # Web Crawling — URL content fetcher (server-safe, zero browser deps)
-    "trafilatura>=1.12.0",       # Tier 1: best-in-class article extraction
-    "readability-lxml>=0.8.1",   # Tier 2: Mozilla Readability algorithm
-    "goose3>=3.1.17",            # Tier 3: article text + metadata extraction
-    # PDF generation
+    "trafilatura>=1.12.0",
+    "readability-lxml>=0.8.1",
+    "goose3>=3.1.17",
     "reportlab>=4.0.0",
     "pillow>=10.0.0",
-    # Channels
     "python-telegram-bot>=20.0",
     "slack-bolt>=1.18.0",
     "discord.py>=2.3.2",
     "rich>=13.0.0",
-    # Utilities
     "python-dotenv>=1.0.0",
     "tenacity>=8.2.3",
     "python-multipart>=0.0.6",
