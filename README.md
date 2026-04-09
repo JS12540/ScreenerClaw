@@ -13,64 +13,6 @@ The platform is **self-improving**: every analysis writes learnings (moat assess
 ![Architecture](screener_claw_v3_full_architecture.svg)
 
 
-## Quick Start
-
-### Prerequisites
-
-| Requirement | Version | Notes |
-|-------------|---------|-------|
-| Python | 3.11+ | `python --version` |
-| [uv](https://docs.astral.sh/uv/getting-started/installation/) | latest | Fast Python package manager |
-| Node.js | 18+ | Only needed for WhatsApp channel — `node --version` |
-
-### Install
-
-```bash
-git clone https://github.com/JS12540/ScreenerClaw.git
-cd ScreenerClaw
-
-# Create virtual environment and install all dependencies
-uv venv .venv
-
-# Activate the venv
-# Windows
-.venv\Scripts\activate
-# macOS / Linux
-source .venv/bin/activate
-
-# This is important for screenerclaw command to run
-uv pip install -e .
-
-
-
-# Copy the example env file and fill in your API keys
-cp .env.example .env
-```
-
-### Run
-
-```bash
-# CLI (no API keys needed beyond LLM keys)
-screenerclaw run
-
-# Telegram bot
-screenerclaw run --channel telegram
-
-# Slack / Discord / WhatsApp
-screenerclaw run --channel slack
-screenerclaw run --channel discord
-screenerclaw run --channel whatsapp   # Node.js required — QR scan on first run
-
-# FastAPI backend
-screenerclaw api
-```
-
-> **WhatsApp first run:** a QR code prints in the terminal. Open WhatsApp → Settings → Linked Devices → Link a Device → scan. Session is saved; future runs reconnect automatically.
-
----
-
-## Architecture
-
 ### LLM Routing
 
 | Task Type | Provider | Model |
