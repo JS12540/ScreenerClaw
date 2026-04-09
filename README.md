@@ -8,6 +8,10 @@ Agents are brutally honest — designed to protect capital first, generate retur
 The platform is **self-improving**: every analysis writes learnings (moat assessments, sector observations, buy ranges) to persistent memory files. Future analyses for the same company or sector load that prior context automatically.
 
 ---
+## Architecture
+
+![Architecture](screener_claw_v3_full_architecture.svg)
+
 
 ## Quick Start
 
@@ -27,13 +31,17 @@ cd ScreenerClaw
 
 # Create virtual environment and install all dependencies
 uv venv .venv
-uv pip install -e .
 
 # Activate the venv
 # Windows
 .venv\Scripts\activate
 # macOS / Linux
 source .venv/bin/activate
+
+# This is important for screenerclaw command to run
+uv pip install -e .
+
+
 
 # Copy the example env file and fill in your API keys
 cp .env.example .env
@@ -152,7 +160,7 @@ Generated queries run in parallel across all available backends:
 |---------|----------|-------------|-------|
 | **DuckDuckGo** (`ddgs`) | Nothing | Max 2 concurrent (semaphore) | Always active; retries once on empty result |
 | **Groq Compound** (`compound-beta-mini`) | `GROQ_API_KEY` | Unlimited | Built-in web search, fails gracefully |
-| ~~OpenAI Responses API~~ | `OPENAI_API_KEY` | — | Disabled — uncomment in `web_search.py` to re-enable |
+| **OpenAI Responses API** | `OPENAI_API_KEY` | — | You can enable this by setting `OPENAI_API_KEY` |
 
 **DuckDuckGo rate-limit protection:** A semaphore limits DDG to 2 concurrent requests. When 6 queries run at once, the remaining 4 queue and run as slots free. Each query retries once (with a 1s delay) if DDG returns an empty result. This prevents the silent empty-results failure that caused downstream LLM report generation to fail.
 
