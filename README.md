@@ -9,10 +9,6 @@ The platform is **self-improving**: every analysis writes learnings (moat assess
 
 ---
 
-## Architecture
-
-![ScreenerClaw architecture](screener_claw_architecture.svg)
-
 ## Quick Start
 
 ### Prerequisites
@@ -31,15 +27,13 @@ cd ScreenerClaw
 
 # Create virtual environment and install all dependencies
 uv venv .venv
+uv pip install -e .
 
 # Activate the venv
 # Windows
 .venv\Scripts\activate
 # macOS / Linux
 source .venv/bin/activate
-
-# This is important for command screenerclaw to work
-uv pip install -e .
 
 # Copy the example env file and fill in your API keys
 cp .env.example .env
@@ -164,6 +158,29 @@ Generated queries run in parallel across all available backends:
 
 Results from all backends and all queries are merged, deduplicated, and passed to the analysis LLMs as search context.
 
+#### Phase 2.5 — URL Content Enrichment (optional)
+
+After search, agents can call `enrich_with_crawl(results, max_urls=3)` to fetch the **full article text** from the top DDG URLs. This turns the short DDG snippet (~200 chars) into the complete page body (~4000 chars) — much richer context for the LLM.
+
+**Stack — server-safe, zero browser binaries, pure pip install:**
+
+| Tier | Library | Role |
+|------|---------|------|
+| 1 | **trafilatura** v2.0 | Best-in-class article extraction; strips ads/nav/footers precisely. Used by HuggingFace & Microsoft Research for web corpus building. |
+| 2 | **readability-lxml** | Mozilla Readability algorithm — the same logic Firefox Reader View uses. Good fallback for layout-heavy pages. |
+| 3 | **BeautifulSoup 4** | Manual visible-text extraction. Already a core dependency; always available as final fallback. |
+
+All three extractors run against the **same single httpx GET request** — no duplicate network calls. If tier 1 extracts enough text (≥ 150 chars), tiers 2 and 3 are skipped.
+
+Groq results (no URL) are passed through unchanged. Only DuckDuckGo results with real HTTP URLs are crawled.
+
+```python
+# Example usage in an agent
+results = await search_client.search_many(queries)
+enriched = await search_client.enrich_with_crawl(results, max_urls=3)
+context  = search_client.format_results_for_llm(enriched)
+```
+
 ### Valuation Methods (9)
 
 Adaptive by stock type — cyclicals get Graham Formula + DCF, compounders get DCF + EPV + Greenwald, dividend stocks get DDM, conglomerates get SOTP:
@@ -188,7 +205,7 @@ The LLM `AssumptionsAgent` populates `sotp_segments` from segment-level EBITDA e
 #### Greenwald EPV + Growth Valuation (Method 12)
 
 Always computed when ROCE + Book Value data is available:
-- **EPV (no-growth)** = Normalized EPS / R  (at R = 10% and R = 12%)
+- **EPV (no-growth)** = Latest EPS (TTM) / R  (at R = 10% and R = 12%)
 - **Growth PV** = Capital × (ROC − G) / (R − G)  for G = 4%, 6%, 8%, 10%
 - **ROC > R** → growth creates value · **ROC < R** → EPV is the ceiling (value trap)
 
@@ -620,7 +637,8 @@ screener_agent/
 │   │   ├── slack_channel.py        # slack-bolt (DM + app_mention only)
 │   │   ├── discord_channel.py      # discord.py (PDF + DM/mention only)
 │   │   └── whatsapp_channel.py     # Baileys bridge (PDF + Bad MAC auto-recovery)
-│   ├── data/web_search.py          # DuckDuckGo + Groq (OpenAI disabled)
+│   ├── data/web_search.py          # DuckDuckGo + Groq (OpenAI disabled) + enrich_with_crawl()
+│   ├── data/web_crawl.py           # URL content fetcher: trafilatura → readability-lxml → BS4
 │   ├── scoring/engine.py           # Quick scoring for screening mode
 │   ├── screener/
 │   │   ├── auth.py                 # Screener.in login

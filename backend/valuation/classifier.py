@@ -77,6 +77,19 @@ def classify_stock_type(raw_data: dict) -> str:
     if any(k in combined for k in cyclical_keywords):
         return "CYCLICAL"
 
+    # Real asset: real estate / construction / hospitality keywords
+    real_asset_keywords = [
+        "real estate", "realty", "construction", "housing", "developer",
+        "property", "hospitality", "hotel", "resort", "media",
+    ]
+    if any(k in combined for k in real_asset_keywords):
+        return "REAL_ASSET"
+
+    # Infrastructure keywords not caught by sector list
+    infra_keywords = ["infrastructure", "power", "road", "highway", "port", "airport", "railway", "defence"]
+    if any(k in combined for k in infra_keywords):
+        return "INFRASTRUCTURE"
+
     return "UNKNOWN"
 
 

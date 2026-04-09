@@ -8,6 +8,11 @@ All three backends run SIMULTANEOUSLY via asyncio.gather:
 
 Results from all available backends are merged and deduplicated.
 Multiple search queries also run in parallel.
+
+Optional URL enrichment (enrich_with_crawl):
+  After search, call enrich_with_crawl(results) to fetch full article text
+  from the top DDG URLs. Uses WebCrawler (trafilatura → readability → BS4).
+  Turns 200-char DDG snippets into 4000-char full articles for the LLM.
 """
 from __future__ import annotations
 
@@ -18,6 +23,11 @@ from typing import Optional
 from backend.logger import get_logger
 
 logger = get_logger(__name__)
+
+# Limit concurrent DuckDuckGo requests — hitting DDG with 6 simultaneous
+# requests triggers rate limiting (HTTP 202 / empty results).
+# Max 2 concurrent DDG calls; others queue and run when a slot frees up.
+_DDG_SEMAPHORE = asyncio.Semaphore(2)
 
 
 class SearchResult:
@@ -155,16 +165,45 @@ class WebSearchClient:
                 deduped.append(result)
 
         elapsed = (time.monotonic() - t0) * 1000
-        logger.info(
-            "Parallel multi-query search complete",
-            extra={
-                "queries": len(queries),
-                "raw_results": len(merged),
-                "deduped_results": len(deduped),
-                "elapsed_ms": round(elapsed, 1),
-            },
-        )
+        if not deduped:
+            logger.warning(
+                "All search backends returned zero results — LLM will use Screener.in data only",
+                extra={"queries": len(queries), "elapsed_ms": round(elapsed, 1)},
+            )
+        else:
+            logger.info(
+                "Parallel multi-query search complete",
+                extra={
+                    "queries": len(queries),
+                    "raw_results": len(merged),
+                    "deduped_results": len(deduped),
+                    "elapsed_ms": round(elapsed, 1),
+                },
+            )
         return deduped
+
+    async def enrich_with_crawl(
+        self,
+        results: list[SearchResult],
+        max_urls: int = 3,
+    ) -> list[SearchResult]:
+        """
+        Fetch full article text for the top *max_urls* results that have a URL.
+
+        Replaces the short DDG snippet (.content ~200 chars) with the full
+        crawled page text (~4000 chars). Groq results (no URL) are unchanged.
+
+        Uses WebCrawler: trafilatura → readability-lxml → BeautifulSoup4.
+        All three are pure pip installs — no browser binaries needed.
+
+        Example:
+            results = await client.search_many(queries)
+            enriched = await client.enrich_with_crawl(results, max_urls=3)
+            context = client.format_results_for_llm(enriched)
+        """
+        from backend.data.web_crawl import WebCrawler
+        crawler = WebCrawler()
+        return await crawler.enrich_results(results, max_urls=max_urls)
 
     def format_results_for_llm(self, results: list[SearchResult], max_chars: int = 8000) -> str:
         """Format merged search results into a context block for LLM consumption."""
@@ -254,30 +293,58 @@ class WebSearchClient:
     # ── DuckDuckGo ────────────────────────────────────────────────────────────
 
     async def _ddg_search(self, query: str, num_results: int) -> list[SearchResult]:
-        try:
-            from ddgs import DDGS
+        """
+        DuckDuckGo search with semaphore (max 2 concurrent) and retry (up to 2 attempts).
+        The semaphore prevents rate-limiting when many queries run in parallel.
+        """
+        from ddgs import DDGS
 
-            logger.debug("DuckDuckGo search", extra={"query": query[:60]})
+        async with _DDG_SEMAPHORE:
+            for attempt in range(2):
+                try:
+                    logger.debug(
+                        "DuckDuckGo search",
+                        extra={"query": query[:60], "attempt": attempt + 1},
+                    )
 
-            def _sync_search() -> list[dict]:
-                with DDGS() as ddgs:
-                    return list(ddgs.text(query, max_results=num_results))
+                    def _sync_search() -> list[dict]:
+                        with DDGS() as ddgs:
+                            return list(ddgs.text(query, max_results=num_results))
 
-            loop = asyncio.get_event_loop()
-            raw = await loop.run_in_executor(None, _sync_search)
+                    loop = asyncio.get_event_loop()
+                    raw = await loop.run_in_executor(None, _sync_search)
 
-            return [
-                SearchResult(
-                    title=r.get("title", ""),
-                    url=r.get("href", ""),
-                    content=r.get("body", ""),
-                    score=0.7,
-                    source="duckduckgo",
-                )
-                for r in raw
-            ]
-        except Exception as exc:
-            logger.warning("DuckDuckGo search failed", extra={"error": str(exc), "query": query[:60]})
+                    if raw:
+                        return [
+                            SearchResult(
+                                title=r.get("title", ""),
+                                url=r.get("href", ""),
+                                content=r.get("body", ""),
+                                score=0.7,
+                                source="duckduckgo",
+                            )
+                            for r in raw
+                        ]
+                    # DDG returned empty list (rate-limited) — wait and retry
+                    if attempt == 0:
+                        logger.debug(
+                            "DuckDuckGo returned empty — retrying after 1s",
+                            extra={"query": query[:60]},
+                        )
+                        await asyncio.sleep(1.0)
+
+                except Exception as exc:
+                    logger.warning(
+                        "DuckDuckGo search failed",
+                        extra={"error": str(exc), "query": query[:60], "attempt": attempt + 1},
+                    )
+                    if attempt == 0:
+                        await asyncio.sleep(1.0)
+
+            logger.warning(
+                "DuckDuckGo gave no results after retries",
+                extra={"query": query[:60]},
+            )
             return []
 
     async def _ddg_news_search(self, query: str, num_results: int) -> list[SearchResult]:

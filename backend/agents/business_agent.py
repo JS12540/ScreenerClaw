@@ -15,7 +15,7 @@ from __future__ import annotations
 import json
 import re
 import time
-from typing import Any
+from typing import Any, Optional
 
 from backend.llm_client import LLMClient
 from backend.data.web_search import WebSearchClient, build_business_search_queries, build_news_search_queries
@@ -277,7 +277,7 @@ class BusinessAgent:
         self.llm = llm_client
         self.searcher = WebSearchClient()
 
-    async def analyze(self, raw_data: dict) -> dict[str, Any]:
+    async def analyze(self, raw_data: dict, queries: Optional[list[str]] = None) -> dict[str, Any]:
         t0 = time.monotonic()
         company = raw_data.get("company_name", raw_data.get("symbol", "Company"))
         sector = raw_data.get("sector", "")
@@ -290,11 +290,15 @@ class BusinessAgent:
         # Step 1: All search queries run in parallel across all backends
         search_context = ""
         try:
-            queries = (
-                build_business_search_queries(company, sector)
-                + build_news_search_queries(company)
-            )[:4]
-            all_results = await self.searcher.search_many(queries, num_results=3)
+            # Use pre-generated queries if provided, else fall back to old hardcoded templates
+            if queries:
+                search_queries = queries[:6]
+            else:
+                search_queries = (
+                    build_business_search_queries(company, sector)
+                    + build_news_search_queries(company)
+                )[:4]
+            all_results = await self.searcher.search_many(search_queries, num_results=3)
             search_context = self.searcher.format_results_for_llm(all_results, max_chars=5000)
             logger.info(
                 "BusinessAgent web search done",

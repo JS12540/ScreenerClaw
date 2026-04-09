@@ -37,18 +37,20 @@ All methods produce a `value_per_share` in ₹ and a `margin_of_safety` percenta
 - India adjustment: use normalized EPS (3-5yr average), not trailing
 
 ## 2. Greenwald EPV (Earnings Power Value)
-**Formula:** `Normalized EBIT × (1 - tax_rate) / WACC`
+**Formula:** `Latest EPS (TTM) × Shares / R`
 - Bruce Greenwald's core valuation — assumes zero growth
+- Uses latest reported EPS (TTM), not normalized EPS
 - If EPV < market price: you are paying for growth
 - If EPV > market price: growth is free — strong value signal
-- Most useful for stable-margin businesses with predictable EBIT
-- India WACC: 13%
+- Most useful for stable-margin businesses with predictable earnings
+- India R: 12–13%
 
 ## 3. Greenwald Growth Value
-**Formula:** `EPV × (1 + g / (r - g))`
+**Formula:** `Capital × (ROC − G) / (R − G)`
 - Extension of EPV when the company has a genuine competitive advantage
 - Only apply when moat is confirmed (moat_score > 60)
 - Growth (g) is the warranted growth rate, not management guidance
+- Uses latest EPS (TTM) for the EPV base, same as Method 2
 
 ## 4. DCF — Base Case
 **Formula:** Standard discounted free cash flow (10-year projection + terminal value)

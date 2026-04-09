@@ -145,9 +145,9 @@ class ValuationEngine:
             )
 
         # ── 6. EPV (Greenwald Earnings Power Value) ────────────────────────────
-        if "epv" in methods and norm_eps > 0 and shares_cr > 0:
+        if "epv" in methods and eps_rep > 0 and shares_cr > 0:
             results["epv"] = self._epv(
-                norm_eps_total_cr=norm_eps * shares_cr, r=r_val, shares_cr=shares_cr,
+                latest_eps_total_cr=eps_rep * shares_cr, r=r_val, shares_cr=shares_cr,
             )
 
         # ── 6. DDM ─────────────────────────────────────────────────────────────
@@ -163,10 +163,13 @@ class ValuationEngine:
                 actual_5yr_cagr=g_base,
             )
 
-        # ── 8. Greenwald EPV + Growth ─────────────────────────────────────────
-        if norm_eps > 0 and norm_roce > 0 and capital_per_share > 0 and shares_cr > 0:
+        # ── 8. Greenwald EPV + Growth — always computed for all stock types ──────
+        # eps_rep is already resolved by the scraper: TTM → last annual → key metrics.
+        # Never use normalized EPS here — Greenwald uses actual reported earnings only.
+        if eps_rep > 0 and norm_roce > 0 and capital_per_share > 0 and shares_cr > 0:
             results["greenwald_growth"] = self._greenwald(
-                norm_eps=norm_eps,
+                latest_eps=eps_rep,
+                eps_source="TTM EPS" if eps_rep > 0 else "Latest Annual EPS",
                 norm_roce=norm_roce,
                 capital_per_share=capital_per_share,
                 shares_cr=shares_cr,
@@ -342,16 +345,16 @@ class ValuationEngine:
 
     # ── Method 6: EPV ─────────────────────────────────────────────────────────
 
-    def _epv(self, norm_eps_total_cr: float, r: float, shares_cr: float) -> dict:
+    def _epv(self, latest_eps_total_cr: float, r: float, shares_cr: float) -> dict:
         def per_share(r_pct: float) -> Optional[float]:
             if r_pct <= 0 or shares_cr <= 0:
                 return None
-            return round(norm_eps_total_cr / (r_pct / 100) / shares_cr, 2)
+            return round(latest_eps_total_cr / (r_pct / 100) / shares_cr, 2)
 
         return {
             "method": "Earnings Power Value",
-            "formula": "EPV = Normalized Earnings / R",
-            "norm_earnings_cr": round(norm_eps_total_cr, 2),
+            "formula": "EPV = Latest Earnings / R",
+            "latest_earnings_cr": round(latest_eps_total_cr, 2),
             "r10_value": per_share(10),
             "r12_value": per_share(12),
             "r13_value": per_share(13),
@@ -440,7 +443,8 @@ class ValuationEngine:
 
     def _greenwald(
         self,
-        norm_eps: float,
+        latest_eps: float,
+        eps_source: str,
         norm_roce: float,
         capital_per_share: float,
         shares_cr: float,
@@ -451,10 +455,10 @@ class ValuationEngine:
 
         Step 1: Capital Invested
             Capital = Book Value per share × Shares outstanding
-            Total Earnings = EPS × Shares
+            Total Earnings = Latest EPS × Shares
 
         Step 2: No-Growth EPV
-            EPV = Normalized Earnings / R
+            EPV = Latest Earnings / R
             Computed for R = 10% and R = 12%
 
         Step 3: Greenwald Growth Formula
@@ -471,7 +475,7 @@ class ValuationEngine:
 
         roc = norm_roce / 100
         r_d = r / 100
-        total_earnings_cr = norm_eps * shares_cr
+        total_earnings_cr = latest_eps * shares_cr
         total_capital_cr  = capital_per_share * shares_cr
 
         # ── EPV (no-growth) ───────────────────────────────────────────────────
@@ -533,10 +537,11 @@ class ValuationEngine:
 
         return {
             "method": "Greenwald EPV + Growth",
-            "formula": "EPV = Earnings/R  |  PV = Capital × (ROC−G) / (R−G)",
+            "formula": "EPV = Latest Earnings/R  |  PV = Capital × (ROC−G) / (R−G)",
             "applicable": True,
             # Inputs
-            "norm_eps": norm_eps,
+            "latest_eps": latest_eps,
+            "eps_source": eps_source,
             "norm_roce_pct": norm_roce,
             "capital_per_share": capital_per_share,
             "total_capital_cr": round(total_capital_cr, 2),

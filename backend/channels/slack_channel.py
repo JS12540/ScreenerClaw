@@ -43,7 +43,7 @@ class SlackChannel(BaseChannel):
         async def _process_message(event, say, text):
             user_id = event.get("user", "unknown")
 
-            await say("Analysing... this may take 30-60 seconds.")
+            await say("Analysing... this may take 3-5 minutes.")
 
             msg = InboundMessage(
                 channel="slack",

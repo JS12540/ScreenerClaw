@@ -2,18 +2,20 @@
 ScreenerClaw — Smart Ticker Resolver
 
 Resolves user input to a valid Screener.in ticker symbol.
-Handles:
-  - Direct NSE symbols (TCS, INFY, RELIANCE)
-  - BSE codes (500325, 532540)
-  - Company names ("Tata Consultancy", "Reliance Industries")
-  - Partial names ("Tata Cons", "Infosys Tech")
-  - Common misspellings ("Infossys", "Relaince")
-  - Mixed input ("Analyse hdfc bank" → "HDFCBANK")
 
 Resolution order:
-  1. Direct symbol attempt (if input looks like a symbol)
-  2. Screener.in search API
-  3. DuckDuckGo search as fallback
+  1. Known aliases        (instant hardcoded map for top ~80 stocks)
+  2. Local NSE universe   (downloaded CSV → JSON cache, fuzzy name search)
+  3. BSE code → NSE       (6-digit BSE code → Screener.in search → extract NSE symbol)
+  4. Screener.in search API
+  5. DuckDuckGo fallback
+
+Key fix over previous version:
+  - resolve_ticker() accepts `company_name` (from QueryRouter) as a second query
+    so that even if the LLM abbreviates "arrowgreentech" → "AGT", we can still
+    fuzzy-match "arrowgreentech" against the full NSE listing.
+  - "Direct symbol" fallback now verifies the symbol exists in the NSE universe
+    before accepting it blindly.
 """
 from __future__ import annotations
 
@@ -30,7 +32,6 @@ logger = get_logger(__name__)
 SCREENER_SEARCH_URL = "https://www.screener.in/api/company/search/?q={query}&v=3&fts=1"
 
 # Common company name → NSE symbol mappings for instant resolution
-# (covers most frequently searched Indian stocks)
 KNOWN_ALIASES: dict[str, str] = {
     # Tata Group
     "tcs": "TCS", "tata consultancy": "TCS", "tata consultancy services": "TCS",
@@ -122,50 +123,124 @@ KNOWN_ALIASES: dict[str, str] = {
 async def resolve_ticker(
     user_input: str,
     http_client: Optional[httpx.AsyncClient] = None,
+    company_name: Optional[str] = None,
 ) -> tuple[str, str]:
     """
     Resolve user input to a Screener.in ticker symbol.
 
+    Args:
+        user_input:   Ticker or company name extracted by QueryRouter LLM.
+                      May be an abbreviation like "AGT" even for "arrowgreentech".
+        http_client:  Optional shared httpx client.
+        company_name: Full company name from QueryRouter (e.g. "Arrow Greentech").
+                      Used as a fallback query when user_input is a short abbreviation
+                      that doesn't match anything in the universe.
+
     Returns:
-        (ticker, method) — e.g. ("TCS", "direct") or ("INFY", "screener_search")
+        (ticker, method) — e.g. ("ARROWGREEN", "universe_name")
 
     Raises:
-        ValueError: if no ticker could be resolved
+        ValueError: if no ticker could be resolved.
     """
     raw = user_input.strip()
-
-    # ── Step 0: Extract ticker from natural language ──────────────────────────
-    # e.g. "analyse TCS" → "TCS", "what is the value of Reliance" → "Reliance"
     cleaned = _extract_company_from_query(raw)
-    logger.info("Ticker resolver: raw=%r cleaned=%r", raw, cleaned)
+    logger.info("Ticker resolver: raw=%r cleaned=%r company_name=%r", raw, cleaned, company_name)
 
-    # ── Step 1: Known aliases (instant, handles misspellings + common names) ──
-    alias_result = _check_aliases(cleaned)
-    if alias_result:
-        logger.info("Ticker resolved via alias: %s → %s", cleaned, alias_result)
-        return alias_result, "alias"
+    # ── Step 1: Known aliases ─────────────────────────────────────────────────
+    for candidate in _candidates(cleaned, company_name):
+        alias = _check_aliases(candidate)
+        if alias:
+            logger.info("Ticker resolved via alias: %s → %s", candidate, alias)
+            return alias, "alias"
 
-    # ── Step 2: Looks like a direct symbol or BSE code — try it directly ──────
+    # ── Step 2: Local NSE universe (name search) ──────────────────────────────
+    # Try every candidate string: the extracted ticker/name AND the company_name.
+    # This catches "AGT" passed from LLM but "arrowgreentech" found via company_name.
+    universe_result = _universe_search(cleaned, company_name)
+    if universe_result:
+        logger.info(
+            "Ticker resolved via universe: query=%r → %s (match_type=%s, score=%s)",
+            universe_result["_query"],
+            universe_result["symbol"],
+            universe_result["match_type"],
+            universe_result["score"],
+        )
+        return universe_result["symbol"], f"universe_{universe_result['match_type']}"
+
+    # ── Step 3: BSE 6-digit code ──────────────────────────────────────────────
+    if re.match(r"^\d{6}$", cleaned.strip()):
+        screener_result = await _screener_search(cleaned.strip(), http_client)
+        if screener_result:
+            logger.info("BSE code resolved via Screener.in: %s → %s", cleaned, screener_result)
+            return screener_result, "bse_code"
+
+    # ── Step 4: Direct symbol — only accept if verified in universe ───────────
     if _looks_like_symbol(cleaned):
-        logger.info("Ticker resolved as direct symbol: %s", cleaned.upper())
-        return cleaned.upper(), "direct"
+        from backend.screener.stock_universe import is_valid_nse_symbol
+        if is_valid_nse_symbol(cleaned):
+            logger.info("Ticker resolved as verified direct symbol: %s", cleaned.upper())
+            return cleaned.upper(), "direct_verified"
+        else:
+            logger.info(
+                "Symbol %r not in NSE universe — skipping direct fallback, trying Screener.in",
+                cleaned.upper(),
+            )
 
-    # ── Step 3: Screener.in search API ───────────────────────────────────────
-    screener_result = await _screener_search(cleaned, http_client)
-    if screener_result:
-        logger.info("Ticker resolved via Screener.in search: %s → %s", cleaned, screener_result)
-        return screener_result, "screener_search"
+    # ── Step 5: Screener.in search API ───────────────────────────────────────
+    for candidate in _candidates(cleaned, company_name):
+        screener_result = await _screener_search(candidate, http_client)
+        if screener_result:
+            logger.info("Ticker resolved via Screener.in: %s → %s", candidate, screener_result)
+            return screener_result, "screener_search"
 
-    # ── Step 4: DuckDuckGo fallback ───────────────────────────────────────────
-    ddg_result = await _ddg_resolve(cleaned)
-    if ddg_result:
-        logger.info("Ticker resolved via DuckDuckGo: %s → %s", cleaned, ddg_result)
-        return ddg_result, "duckduckgo"
+    # ── Step 6: DuckDuckGo fallback ───────────────────────────────────────────
+    for candidate in _candidates(cleaned, company_name):
+        ddg_result = await _ddg_resolve(candidate)
+        if ddg_result:
+            logger.info("Ticker resolved via DuckDuckGo: %s → %s", candidate, ddg_result)
+            return ddg_result, "duckduckgo"
 
     raise ValueError(
         f"Could not resolve '{cleaned}' to a known Indian stock ticker. "
-        "Please use the NSE symbol (e.g. TCS, INFY, RELIANCE) or the company name."
+        "Please use the NSE symbol (e.g. TCS, INFY, RELIANCE) or the full company name."
     )
+
+
+# ── Helpers ───────────────────────────────────────────────────────────────────
+
+def _candidates(cleaned: str, company_name: Optional[str]) -> list[str]:
+    """Return de-duplicated list of strings to try, cleaned first."""
+    seen: set[str] = set()
+    result: list[str] = []
+    for s in filter(None, [cleaned, company_name]):
+        key = s.lower().strip()
+        if key not in seen:
+            seen.add(key)
+            result.append(s.strip())
+    return result
+
+
+def _universe_search(cleaned: str, company_name: Optional[str]) -> Optional[dict]:
+    """
+    Search the local NSE universe with all available candidate strings.
+    Returns the best match dict (with added _query key) or None.
+    Requires score >= 0.75 to avoid false positives.
+    """
+    from backend.screener.stock_universe import search_universe
+
+    MIN_SCORE = 0.75
+
+    best: Optional[dict] = None
+    best_score: float = 0.0
+
+    for query in _candidates(cleaned, company_name):
+        matches = search_universe(query, limit=3, exchange_filter="NSE")
+        if matches and matches[0]["score"] >= MIN_SCORE:
+            if matches[0]["score"] > best_score:
+                best_score = matches[0]["score"]
+                best = {**matches[0], "_query": query}
+
+    return best
 
 
 def _extract_company_from_query(query: str) -> str:
@@ -185,31 +260,25 @@ def _extract_company_from_query(query: str) -> str:
 def _check_aliases(text: str) -> Optional[str]:
     """Check against known company name → ticker mappings."""
     key = text.lower().strip()
-    # Exact match
     if key in KNOWN_ALIASES:
         return KNOWN_ALIASES[key]
-    # Partial match — if input contains a known alias key
     for alias, ticker in KNOWN_ALIASES.items():
         if alias in key or key in alias:
-            if len(alias) >= 4:  # avoid matching very short keys like "sbi" in "subsidiary"
+            if len(alias) >= 4:
                 return ticker
     return None
 
 
 def _looks_like_symbol(text: str) -> bool:
-    """Return True if text looks like a direct NSE/BSE symbol or BSE code."""
+    """Return True if text looks like a direct NSE symbol (no spaces, 2-15 chars)."""
     t = text.strip().upper()
-    # BSE numeric code: 6 digits
-    if re.match(r"^\d{6}$", t):
-        return True
-    # NSE symbol: 2-15 uppercase letters/digits/hyphens, no spaces
     if re.match(r"^[A-Z0-9&\-]{2,15}$", t) and " " not in t:
         return True
     return False
 
 
 async def _screener_search(query: str, client: Optional[httpx.AsyncClient] = None) -> Optional[str]:
-    """Search Screener.in's autocomplete API and return the best matching ticker."""
+    """Search Screener.in autocomplete API and return the best matching ticker."""
     url = SCREENER_SEARCH_URL.format(query=query.replace(" ", "+"))
 
     async def _do_search(c: httpx.AsyncClient) -> Optional[str]:
@@ -218,16 +287,12 @@ async def _screener_search(query: str, client: Optional[httpx.AsyncClient] = Non
             if resp.status_code != 200:
                 return None
             data = resp.json()
-            # Response is a list of {id, name, url, ...} or similar
             if isinstance(data, list) and data:
-                # First result is best match — extract ticker from url or name
                 first = data[0]
-                # URL format: /company/TCS/
                 url_field = first.get("url", "")
                 ticker_match = re.search(r"/company/([^/]+)/", url_field)
                 if ticker_match:
                     return ticker_match.group(1).upper()
-                # Fallback: use the 'name' field
                 name = first.get("name", "")
                 if name:
                     return name.upper().split()[0]
@@ -258,11 +323,9 @@ async def _ddg_resolve(query: str) -> Optional[str]:
 
         for r in results:
             body = r.get("body", "") + " " + r.get("title", "")
-            # Look for NSE: or BSE: patterns in results
             match = re.search(r"(?:NSE|BSE):\s*([A-Z]{2,15})", body)
             if match:
                 return match.group(1)
-            # Look for screener.in URL pattern
             url = r.get("href", "")
             ticker_match = re.search(r"screener\.in/company/([^/]+)/", url)
             if ticker_match:

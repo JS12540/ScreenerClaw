@@ -88,6 +88,16 @@ async def main(channel_arg: str) -> None:
 
     gw = build_gateway(channels)
 
+    # Pre-download NSE + BSE stock universe (background, non-blocking)
+    async def _preload_universe():
+        try:
+            from backend.screener.stock_universe import ensure_universe
+            await ensure_universe()
+        except Exception as exc:
+            logger.warning("Stock universe preload failed (non-fatal): %s", exc)
+
+    asyncio.ensure_future(_preload_universe())
+
     logger.info("Starting ScreenerClaw gateway", extra={"channels": channels})
     try:
         await gw.start_all()

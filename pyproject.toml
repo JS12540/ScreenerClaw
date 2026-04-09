@@ -20,6 +20,10 @@ dependencies = [
     "lxml>=5.1.0",
     "httpx>=0.26.0",
     "yfinance>=0.2.36",
+    # Web Crawling — URL content fetcher (server-safe, zero browser deps)
+    "trafilatura>=1.12.0",       # Tier 1: best-in-class article extraction
+    "readability-lxml>=0.8.1",   # Tier 2: Mozilla Readability algorithm
+    "goose3>=3.1.17",            # Tier 3: article text + metadata extraction
     # PDF generation
     "reportlab>=4.0.0",
     "pillow>=10.0.0",

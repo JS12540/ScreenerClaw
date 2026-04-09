@@ -10,6 +10,7 @@ Endpoints:
 """
 from __future__ import annotations
 
+import asyncio
 import time
 from datetime import datetime, timezone
 from typing import Optional
@@ -77,6 +78,15 @@ class LLMTestRequest(BaseModel):
 
 # ── Startup / Shutdown ────────────────────────────────────────────────────────
 
+async def _preload_universe() -> None:
+    """Background task: download NSE + BSE listings on first startup."""
+    try:
+        from backend.screener.stock_universe import ensure_universe
+        await ensure_universe()
+    except Exception as exc:
+        logger.warning("Stock universe preload failed (non-fatal): %s", exc)
+
+
 @app.on_event("startup")
 async def on_startup() -> None:
     reasoning_provider, reasoning_model = resolve_task_llm("reasoning")
@@ -99,6 +109,9 @@ async def on_startup() -> None:
         "configured" if settings.screener_username else "guest mode",
     )
     get_pipeline()
+    # Pre-download NSE + BSE stock universe for accurate ticker resolution
+    # Runs in background — does not block startup
+    asyncio.ensure_future(_preload_universe())
 
 
 @app.on_event("shutdown")

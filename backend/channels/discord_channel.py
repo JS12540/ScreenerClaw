@@ -63,7 +63,7 @@ class DiscordChannel(BaseChannel):
                 await message.reply("Ask me about an Indian stock! e.g. 'Analyse Reliance'")
                 return
 
-            await message.reply("Analysing... this may take 30-60 seconds.")
+            await message.reply("Analysing... this may take 3-5 minutes.")
 
             user_id = str(message.author.id)
             msg = InboundMessage(

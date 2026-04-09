@@ -27,6 +27,7 @@ from backend.agents.report_agent import ReportAgent
 from backend.agents.assumptions_agent import AssumptionsAgent
 from backend.agents.verdict_agent import VerdictAgent
 from backend.agents.ranking_agent import RankingAgent
+from backend.agents.query_generator import QueryGeneratorAgent
 from backend.valuation.engine import ValuationEngine
 from backend.valuation.classifier import classify_stock_type, get_valuation_methods, get_margin_of_safety
 from backend.report_builder import build_report
@@ -75,6 +76,7 @@ class ScreenerClawPipeline:
         self.assumptions_agent = AssumptionsAgent(self.llm_execution)
         self.verdict_agent = VerdictAgent(self.llm_execution)
         self.ranking_agent = RankingAgent()
+        self.query_generator = QueryGeneratorAgent(self.llm_execution)
         self.valuation_engine = ValuationEngine()
 
         logger.info(
@@ -169,7 +171,9 @@ class ScreenerClawPipeline:
         # Smart ticker resolution — handles names, BSE codes, misspellings
         try:
             from backend.screener.ticker_resolver import resolve_ticker
-            resolved_ticker, resolve_method = await resolve_ticker(ticker, client)
+            resolved_ticker, resolve_method = await resolve_ticker(
+                ticker, client, company_name=routing.get("company_name")
+            )
             if resolved_ticker != ticker.upper():
                 logger.info(
                     "Ticker resolved",
@@ -230,11 +234,21 @@ class ScreenerClawPipeline:
         except Exception as exc:
             logger.warning("Memory read failed", extra={"error": str(exc)})
 
-        # ── Steps 1 & 2 in parallel ───────────────────────────────────────────
+        # ── Generate smart search queries (once, shared by Steps 1 + 2) ──────────────
+        logger.info("Generating search queries", extra={"ticker": ticker})
+        generated_queries: dict = {}
+        try:
+            generated_queries = await self._safe(
+                self.query_generator.generate(raw_data), "query_generation"
+            )
+        except Exception as exc:
+            logger.warning("Query generation failed — using fallback queries", extra={"error": str(exc)})
+
+        # ── Steps 1 & 2 in parallel ───────────────────────────────────────────────────
         logger.info("Steps 1+2 starting (parallel)", extra={"ticker": ticker})
         business_analysis, macro_analysis = await asyncio.gather(
-            self._safe(self.business_agent.analyze(raw_data), "business_analysis"),
-            self._safe(self.macro_agent.analyze(raw_data), "macro_analysis"),
+            self._safe(self.business_agent.analyze(raw_data, queries=generated_queries.get("business_queries") or generated_queries.get("news_queries", [])), "business_analysis"),
+            self._safe(self.macro_agent.analyze(raw_data, queries=generated_queries.get("macro_queries")), "macro_analysis"),
         )
 
         # ── Step 3: Report & Outlook ──────────────────────────────────────────

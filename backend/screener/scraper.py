@@ -162,7 +162,47 @@ class ScreenerScraper:
         # ── J. Documents ────────────────────────────────────────────────────
         data["documents"] = self._parse_documents(soup)
 
+        # ── Post-process: derive eps_ttm robustly from P&L table ────────────
+        # The top-ratios strip may miss EPS or show a stale value.
+        # P&L table is authoritative: prefer TTM column, then last annual year.
+        data["eps_ttm"] = self._resolve_eps(
+            key_metrics_eps=data.get("eps_ttm"),
+            pl_eps=data.get("pl_eps", []),
+        )
+
         return data
+
+    def _resolve_eps(
+        self,
+        key_metrics_eps: Optional[float],
+        pl_eps: list[dict],
+    ) -> Optional[float]:
+        """
+        Return the best available EPS value in this priority:
+          1. TTM column from P&L table  (year == "TTM")
+          2. Latest annual year from P&L table  (last non-TTM entry with a value)
+          3. EPS from key-metrics strip  (top-ratios)
+        The key-metrics strip is only a fallback because it can be absent or
+        show a slightly different figure than the P&L table TTM value.
+        """
+        ttm_val = None
+        last_annual_val = None
+
+        for entry in pl_eps:
+            year = (entry.get("year") or "").strip().upper()
+            val = entry.get("value")
+            if val is None:
+                continue
+            if year == "TTM":
+                ttm_val = val
+            else:
+                last_annual_val = val  # keep updating → last annual wins
+
+        if ttm_val is not None:
+            return ttm_val
+        if last_annual_val is not None:
+            return last_annual_val
+        return key_metrics_eps
 
     # ─── A. Key Metrics ───────────────────────────────────────────────────────
 

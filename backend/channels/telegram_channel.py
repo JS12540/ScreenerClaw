@@ -65,7 +65,7 @@ class TelegramChannel(BaseChannel):
                 )
                 return
 
-            await update.message.reply_text("Analysing... this may take 30-60 seconds.")
+            await update.message.reply_text("Analysing... this may take 3-5 minutes.")
 
             msg = InboundMessage(
                 channel="telegram",

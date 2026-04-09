@@ -116,7 +116,10 @@ STOCK_TYPES = {
     "INFRASTRUCTURE":      [
         "Infrastructure", "Roads", "Power", "Defence", "Railways",
     ],
-    "REAL_ASSET":          ["Real Estate", "Hospitality", "Media"],
+    "REAL_ASSET":          [
+        "Real Estate", "Realty", "Construction", "Housing",
+        "Property", "Hospitality", "Hotels", "Media",
+    ],
     "GROWTH":              ["Technology", "E-Commerce", "SaaS"],
     "DIVIDEND_YIELD":      ["Utilities", "Oil & Gas"],
     "CONGLOMERATE":        [

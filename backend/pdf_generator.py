@@ -15,7 +15,7 @@ from reportlab.lib.pagesizes import A4
 from reportlab.lib.styles import ParagraphStyle
 from reportlab.lib.units import cm, mm
 from reportlab.platypus import (
-    HRFlowable, KeepTogether, Paragraph, SimpleDocTemplate,
+    HRFlowable, KeepTogether, Paragraph as _RLParagraph, SimpleDocTemplate,
     Spacer, Table, TableStyle,
 )
 
@@ -179,6 +179,56 @@ def _build_styles() -> dict:
     return styles
 
 
+# ── Text sanitizer ────────────────────────────────────────────────────────────
+# Helvetica only covers Latin-1. Replace common Unicode chars that the LLM
+# outputs so they never render as ■ (missing-glyph box) in the PDF.
+
+_UNICODE_MAP = str.maketrans({
+    "\u2014": "--",   # em dash  —
+    "\u2013": "-",    # en dash  –
+    "\u2012": "-",    # figure dash
+    "\u2010": "-",    # hyphen
+    "\u2011": "-",    # non-breaking hyphen
+    "\u2018": "'",    # left single quote  '
+    "\u2019": "'",    # right single quote '
+    "\u201a": ",",    # single low-9 quote ‚
+    "\u201c": '"',    # left double quote  "
+    "\u201d": '"',    # right double quote "
+    "\u201e": '"',    # double low-9 quote „
+    "\u2022": "-",    # bullet  •
+    "\u2023": "-",    # triangular bullet ‣
+    "\u25aa": "-",    # small black square ▪
+    "\u25cf": "-",    # black circle ●
+    "\u2026": "...",  # ellipsis …
+    "\u00b7": "-",    # middle dot ·
+    "\u2212": "-",    # minus sign −
+    "\u00d7": "x",    # multiplication sign ×
+    "\u00f7": "/",    # division sign ÷
+    "\u00a0": " ",    # non-breaking space
+    "\u2009": " ",    # thin space
+    "\u200b": "",     # zero-width space
+    "\u2032": "'",    # prime ′
+    "\u2033": '"',    # double prime ″
+    "\u20b9": "Rs",   # Indian rupee sign Rs  (Helvetica lacks it — use Rs)
+    "\u00ae": "(R)",  # registered trademark ®
+    "\u00a9": "(C)",  # copyright ©
+    "\u2122": "(TM)", # trademark ™
+})
+
+
+def _clean(text: str) -> str:
+    """Sanitize text so it renders safely in Helvetica-based PDF."""
+    if not text:
+        return text
+    return text.translate(_UNICODE_MAP)
+
+
+def Paragraph(text, style, *args, **kwargs):
+    """Drop-in wrapper that sanitizes text before passing to ReportLab."""
+    cleaned = _clean(str(text)) if text is not None else ""
+    return _RLParagraph(cleaned, style, *args, **kwargs)
+
+
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
 def _f(v: Any, dec: int = 0) -> str:
@@ -332,14 +382,16 @@ def _build_key_metrics(raw_data: dict, stock_type: str, mos_prices: dict, verdic
 
     price = raw_data.get("current_price")
     mcap  = raw_data.get("market_cap")
-    sector = raw_data.get("sector", "—")
+    sector = raw_data.get("sector", "-")
+    # Use Screener.in industry label (more specific) for Stock Type; fall back to sector
+    screener_industry = (raw_data.get("industry") or raw_data.get("sector") or "-").strip()
 
     # Metrics strip
     cols = [
-        ("Price", f"₹{_f(price)}"),
-        ("Market Cap", f"₹{_f(mcap)} Cr"),
+        ("Price", f"Rs{_f(price)}"),
+        ("Market Cap", f"Rs{_f(mcap)} Cr"),
         ("Sector", sector[:22]),
-        ("Stock Type", (stock_type or "—").replace("_", " ").title()),
+        ("Stock Type", screener_industry[:22]),
     ]
     n = len(cols)
     col_w = page_width / n
@@ -388,8 +440,8 @@ def _build_key_metrics(raw_data: dict, stock_type: str, mos_prices: dict, verdic
                 Paragraph(zone or "—", ParagraphStyle("zv", fontName="Helvetica-Bold",
                                                        fontSize=10, textColor=zone_color,
                                                        alignment=TA_CENTER)),
-                Paragraph(f"₹{_f(base_iv)}", styles["value"]),
-                Paragraph(f"₹{_f(mos_buy)}", ParagraphStyle("mosv", fontName="Helvetica-Bold",
+                Paragraph(f"Rs{_f(base_iv)}", styles["value"]),
+                Paragraph(f"Rs{_f(mos_buy)}", ParagraphStyle("mosv", fontName="Helvetica-Bold",
                                                               fontSize=10, textColor=GREEN,
                                                               alignment=TA_CENTER)),
             ],
@@ -543,7 +595,7 @@ def _build_valuation_section(assumptions: dict, valuation_table: list, mos_price
     if ne or gs:
         asmps = []
         if ne.get("value"):
-            asmps.append(f"Normalised EPS: ₹{_f(ne['value'], 2)}  ({ne.get('method', '')})")
+            asmps.append(f"Normalised EPS: Rs{_f(ne['value'], 2)}  ({ne.get('method', '')})")
         if gs:
             bear = gs.get("bear", {})
             base = gs.get("base", {})
@@ -561,7 +613,7 @@ def _build_valuation_section(assumptions: dict, valuation_table: list, mos_price
 
     # Valuation table
     if valuation_table:
-        tbl_data = [["Method", "Scenario", "Value/Share (₹)", "vs Current", "MOS%"]]
+        tbl_data = [["Method", "Scenario", "Value/Share (Rs)", "vs Current", "MOS%"]]
         for row in valuation_table[:12]:
             val = row.get("value_per_share")
             mos = row.get("mos_pct")
@@ -671,8 +723,8 @@ def _build_financial_section(raw_data: dict, styles: dict, page_width: float) ->
     sales   = [x for x in raw_data.get("pl_sales",       []) if isinstance(x, dict)]
     profits = [x for x in raw_data.get("pl_net_profit",  []) if isinstance(x, dict)]
     if sales and profits:
-        story.append(Paragraph("Revenue & Profit Trend (₹ Cr)", styles["section_title"]))
-        pl_data = [["Year", "Revenue (₹ Cr)", "PAT (₹ Cr)"]]
+        story.append(Paragraph("Revenue & Profit Trend (Rs Cr)", styles["section_title"]))
+        pl_data = [["Year", "Revenue (Rs Cr)", "PAT (Rs Cr)"]]
         for s, p in list(zip(sales, profits))[-8:]:
             pl_data.append([
                 str(s.get("year", "?")),
@@ -708,7 +760,7 @@ def _build_financial_section(raw_data: dict, styles: dict, page_width: float) ->
     if peers:
         story.append(Spacer(1, 6))
         story.append(Paragraph("Peer Comparison", styles["section_title"]))
-        peer_data = [["Company", "P/E", "ROCE %", "MCap (₹ Cr)"]]
+        peer_data = [["Company", "P/E", "ROCE %", "MCap (Rs Cr)"]]
         for p in peers[:6]:
             peer_data.append([
                 str(p.get("name", "—"))[:28],
@@ -819,11 +871,11 @@ def _build_buy_ranges(verdict: dict, current_price: float, styles: dict, page_wi
         price_to   = br.get("price_to")   or br.get("upper")
 
         if price_from and price_to:
-            price_str = f"₹{_f(price_from)} – ₹{_f(price_to)}"
+            price_str = f"Rs{_f(price_from)} – Rs{_f(price_to)}"
         elif price_to:
-            price_str = f"< ₹{_f(price_to)}"
+            price_str = f"< Rs{_f(price_to)}"
         elif price_from:
-            price_str = f"> ₹{_f(price_from)}"
+            price_str = f"> Rs{_f(price_from)}"
         else:
             price_str = "—"
 
@@ -856,15 +908,16 @@ def _build_greenwald_section(valuations: dict, raw_data: dict, styles: dict, pag
     story += _section_header("Greenwald Valuation — EPV & Growth Analysis", styles)
 
     # Step 1: Capital inputs
+    eps_source = gw.get("eps_source", "Latest TTM EPS")
     story.append(Paragraph("<b>Step 1 — Capital Invested</b>", styles["body"]))
     cap_data = [
         ["Item", "Value"],
-        ["Book Value / Share (Capital per Share)", f"₹{_f(gw.get('capital_per_share'), 2)}"],
+        ["Book Value / Share (Capital per Share)", f"Rs{_f(gw.get('capital_per_share'), 2)}"],
         ["Shares Outstanding", f"{_f(gw.get('shares_cr'), 2)} Cr"],
-        ["Total Capital Invested", f"₹{_f(gw.get('total_capital_cr'))} Cr"],
-        ["Normalised EPS", f"₹{_f(gw.get('norm_eps'), 2)}"],
-        ["Total Normalised Earnings", f"₹{_f(gw.get('total_earnings_cr'))} Cr"],
-        ["Normalised ROCE", f"{_f(gw.get('norm_roce_pct'), 1)}%"],
+        ["Total Capital Invested", f"Rs{_f(gw.get('total_capital_cr'))} Cr"],
+        [f"EPS — {eps_source}", f"Rs{_f(gw.get('latest_eps'), 2)}"],
+        ["Total Earnings", f"Rs{_f(gw.get('total_earnings_cr'))} Cr"],
+        ["ROCE (used for growth scenarios)", f"{_f(gw.get('norm_roce_pct'), 1)}%"],
     ]
     cap_tbl = Table(cap_data, colWidths=[80*mm, page_width - 80*mm], style=_table_style())
     story.append(cap_tbl)
@@ -872,11 +925,11 @@ def _build_greenwald_section(valuations: dict, raw_data: dict, styles: dict, pag
 
     # Step 2: EPV
     story.append(Paragraph("<b>Step 2 — Earnings Power Value (No-Growth Floor)</b>", styles["body"]))
-    story.append(Paragraph("EPV = Normalised Earnings ÷ Required Return  (assumes zero reinvestment, zero growth)", styles["small"]))
+    story.append(Paragraph(f"EPV = Latest Earnings (TTM) / Required Return  |  Source: {eps_source}  |  Assumes zero reinvestment, zero growth", styles["small"]))
     epv_r10 = gw.get("epv_r10", {})
     epv_r12 = gw.get("epv_r12", {})
     epv_data = [
-        ["Required Return (R)", "Total EPV (₹ Cr)", "Per Share EPV (₹)"],
+        ["Required Return (R)", "Total EPV (Rs Cr)", "Per Share EPV (Rs)"],
         ["R = 10%", _f(epv_r10.get("total_cr")), _f(epv_r10.get("per_share"))],
         ["R = 12%", _f(epv_r12.get("total_cr")), _f(epv_r12.get("per_share"))],
     ]
@@ -888,7 +941,7 @@ def _build_greenwald_section(valuations: dict, raw_data: dict, styles: dict, pag
     story.append(Paragraph("<b>Step 3 — Greenwald Growth Valuation  (R = 12%)</b>", styles["body"]))
     story.append(Paragraph("Formula: PV = Capital × (ROCE − G) / (R − G)  |  PV/EPV = Growth Premium Multiple", styles["small"]))
     gs = gw.get("growth_scenarios", {})
-    gw_data = [["Growth Rate (G)", "Total Intrinsic Value (₹ Cr)", "Per Share Value (₹)", "PV / EPV Ratio"]]
+    gw_data = [["Growth Rate (G)", "Total Intrinsic Value (Rs Cr)", "Per Share Value (Rs)", "PV / EPV Ratio"]]
     for g_key in ("g4", "g6", "g8", "g10"):
         entry = gs.get(g_key, {})
         if entry.get("error"):
@@ -946,7 +999,7 @@ def _build_sotp_section(valuations: dict, raw_data: dict, styles: dict, page_wid
     story.append(Spacer(1, 4))
 
     # Segment breakdown table
-    seg_data = [["Segment", "Type", "Stake%", "EBITDA (₹Cr)", "Multiple", "Gross EV (₹Cr)", "Attrib. EV (₹Cr)", "Per Share (₹)"]]
+    seg_data = [["Segment", "Type", "Stake%", "EBITDA (RsCr)", "Multiple", "Gross EV (RsCr)", "Attrib. EV (RsCr)", "Per Share (Rs)"]]
     for s in segments:
         ebitda = s.get("ebitda_cr")
         seg_data.append([
@@ -957,7 +1010,7 @@ def _build_sotp_section(valuations: dict, raw_data: dict, styles: dict, page_wid
             f"{_f(s.get('multiple'), 1)}×" if s.get("multiple") else "—",
             _f(s.get("gross_ev_cr")),
             _f(s.get("attributable_ev_cr")),
-            Paragraph(f"₹{_f(s.get('per_share'))}", ParagraphStyle(
+            Paragraph(f"Rs{_f(s.get('per_share'))}", ParagraphStyle(
                 "sotp_ps", fontName="Helvetica-Bold", fontSize=8,
                 textColor=NAVY, alignment=TA_CENTER)),
         ])
@@ -972,7 +1025,7 @@ def _build_sotp_section(valuations: dict, raw_data: dict, styles: dict, page_wid
 
     # Bridge table: from gross EV → per-share equity value
     bridge_data = [
-        ["Item", "Value (₹ Cr)"],
+        ["Item", "Value (Rs Cr)"],
         ["Total EV (pre-discount)", _f(total_ev_pre)],
         [f"Less: HoldCo Discount ({holdco_disc:.0f}%)", f"−{_f(total_ev_pre - total_ev_post)}"],
         ["EV Post Discount", _f(total_ev_post)],
@@ -1005,9 +1058,9 @@ def _build_sotp_section(valuations: dict, raw_data: dict, styles: dict, page_wid
     upside_col = GREEN if (upside_pct or 0) > 10 else (RED if (upside_pct or 0) < -10 else YELLOW)
 
     ps_data = [
-        [Paragraph("BEAR (₹)", styles["label"]),
-         Paragraph("BASE (₹)", styles["label"]),
-         Paragraph("BULL (₹)", styles["label"]),
+        [Paragraph("BEAR (Rs)", styles["label"]),
+         Paragraph("BASE (Rs)", styles["label"]),
+         Paragraph("BULL (Rs)", styles["label"]),
          Paragraph("UPSIDE vs CMP", styles["label"])],
         [Paragraph(_f(bear_ps), styles["value"]),
          Paragraph(_f(base_ps), ParagraphStyle("sotp_base", fontName="Helvetica-Bold",
@@ -1129,7 +1182,7 @@ def generate_report_pdf(result: dict) -> bytes:
         story += sotp_story
         story.append(_hr())
 
-    # ── 5b. Greenwald Detailed Analysis (non-conglomerates)
+    # ── 5b. Greenwald Detailed Analysis (all stock types)
     greenwald_story = _build_greenwald_section(valuations, raw_data, styles, page_width)
     if greenwald_story:
         story += greenwald_story
