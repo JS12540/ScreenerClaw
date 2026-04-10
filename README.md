@@ -12,7 +12,6 @@ The platform is **self-improving**: every analysis writes learnings (moat assess
 
 ![Architecture](screener_claw_v3_full_architecture.svg)
 
-
 ### LLM Routing
 
 | Task Type | Provider | Model |
@@ -346,24 +345,42 @@ Next analysis: memory loaded → better queries → deeper research
 
 ### Setup
 
-```bash
-git clone https://github.com/you/screener-claw
-cd screener_agent
 
-# Create .venv inside project (uv)
+### Prerequisites
+
+| Requirement | Version | Notes |
+|-------------|---------|-------|
+| Python | 3.11+ | `python --version` |
+| [uv](https://docs.astral.sh/uv/getting-started/installation/) | latest | Fast Python package manager |
+| Node.js | 18+ | Only needed for WhatsApp channel — `node --version` |
+
+### Install
+
+```bash
+git clone https://github.com/JS12540/ScreenerClaw.git
+cd ScreenerClaw
+
+# Create virtual environment and install all dependencies
 uv venv .venv
 
-# Install all dependencies and register the CLI
+# Activate the venv
+# Windows
+.venv\Scripts\activate
+# macOS / Linux
+source .venv/bin/activate
+
+# This is important for screenerclaw command to run
 uv pip install -e .
 
-# Copy and configure environment
+# Copy the example env file and fill in your API keys
 cp .env.example .env
-# Edit .env with your API keys
 ```
 
 > **Important:** Always use `uv pip install`, never `pip install`. Bare pip installs to the system/Anaconda environment, not the project `.venv`.
 
 The `uv pip install -e .` step registers the `screenerclaw` command inside `.venv`. After that, all bot and API operations go through the `screenerclaw` CLI — no need to call `python` directly.
+
+### Run
 
 ---
 
@@ -435,11 +452,12 @@ screenerclaw run --channel slack
 screenerclaw run --channel discord
 
 # WhatsApp (QR code scan on first run)
-screenerclaw run --channel whatsapp
+screenerclaw run --channel whatsapp   # Node.js required — QR scan on first run
 
 # All configured channels at once
 screenerclaw run --channel all
 ```
+> **WhatsApp first run:** a QR code prints in the terminal. Open WhatsApp → Settings → Linked Devices → Link a Device → scan. Session is saved; future runs reconnect automatically.
 
 ---
 
