@@ -137,20 +137,21 @@ class ValuationEngine:
         elif "graham_formula" in methods:
             results["graham_formula"] = {"applicable": False, "reason": "EPS ≤ 0"}
 
-        # ── 5. PE-based ────────────────────────────────────────────────────────
+        # ── 4. PE-based (ROCE-aware) ─────────────────────────────────────────────
         if "pe_based" in methods and norm_eps > 0:
             results["pe_based"] = self._pe_based(
                 norm_eps=norm_eps, pe_current=pe_current,
                 g_bear=g_bear, g_base=g_base, g_bull=g_bull,
+                norm_roce=norm_roce,
             )
 
-        # ── 6. EPV (Greenwald Earnings Power Value) ────────────────────────────
+        # ── 5. EPV (Greenwald Earnings Power Value) ────────────────────────────
         if "epv" in methods and eps_rep > 0 and shares_cr > 0:
             results["epv"] = self._epv(
                 latest_eps_total_cr=eps_rep * shares_cr, r=r_val, shares_cr=shares_cr,
             )
 
-        # ── 6. DDM ─────────────────────────────────────────────────────────────
+        # ── 6. DDM ────────────────────────────────────────────────────────────
         if "ddm" in methods and dps > 0:
             results["ddm"] = self._ddm(dps=dps, g_base=g_base, g_bull=g_bull, r=r_val)
         elif "ddm" in methods:
@@ -314,26 +315,52 @@ class ValuationEngine:
     def _pe_based(
         self, norm_eps: float, pe_current: float,
         g_bear: float, g_base: float, g_bull: float,
+        norm_roce: float = 15.0,
     ) -> dict:
-        # Graham's "fair PE" = 15x for no-growth, + growth premium
-        graham_pe = 15
-        growth_pe_base = min(graham_pe + g_base * 0.5, 40)  # cap at 40x
-        growth_pe_bear = min(graham_pe + g_bear * 0.5, 35)
-        growth_pe_bull = min(graham_pe + g_bull * 0.5, 45)
+        """
+        ROCE-aware PE valuation (Damodaran / Epoch Partners ROIC-WACC framework).
+
+        High-ROCE moat businesses deserve premium multiples well beyond Graham's
+        15+g/2 formula, which was designed for average businesses.
+
+        Tiers based on ROIC-WACC spread research:
+          ROCE ≥ 30%: regulatory moats, exchanges, depositories, capital-light
+                      franchises — bear 35x / base 55-80x / bull 65-100x
+          ROCE 20-30%: quality compounders (FMCG, IT, speciality chemicals)
+                       — bear 25x / base 38-60x / bull 48-75x
+          ROCE < 20%:  average / cyclical businesses — original Graham 15+g/2
+                       — bear 15-25x / base 15-35x / bull 15-45x
+        """
+        if norm_roce >= 30:
+            pe_bear = 35.0
+            pe_base = min(55.0 + g_base * 0.5, 80.0)
+            pe_bull = min(65.0 + g_bull * 0.5, 100.0)
+            pe_basis = f"ROCE {norm_roce:.0f}% ≥ 30% — moat premium (Damodaran ROIC-WACC)"
+        elif norm_roce >= 20:
+            pe_bear = 25.0
+            pe_base = min(38.0 + g_base * 0.5, 60.0)
+            pe_bull = min(48.0 + g_bull * 0.5, 75.0)
+            pe_basis = f"ROCE {norm_roce:.0f}% in 20-30% — quality compounder PE"
+        else:
+            pe_bear = min(15.0 + g_bear * 0.5, 25.0)
+            pe_base = min(15.0 + g_base * 0.5, 35.0)
+            pe_bull = min(15.0 + g_bull * 0.5, 45.0)
+            pe_basis = f"ROCE {norm_roce:.0f}% < 20% — Graham formula (15 + g/2)"
 
         current_peg = (pe_current / g_base) if (pe_current and g_base) else None
 
         return {
             "method": "PE-Based",
             "norm_eps": norm_eps,
+            "norm_roce_pct": norm_roce,
+            "pe_basis": pe_basis,
             "pe_current": pe_current,
-            "graham_fair_pe": graham_pe,
-            "implied_pe_bear": round(growth_pe_bear, 1),
-            "implied_pe_base": round(growth_pe_base, 1),
-            "implied_pe_bull": round(growth_pe_bull, 1),
-            "bear": round(norm_eps * growth_pe_bear, 2),
-            "base": round(norm_eps * growth_pe_base, 2),
-            "bull": round(norm_eps * growth_pe_bull, 2),
+            "implied_pe_bear": round(pe_bear, 1),
+            "implied_pe_base": round(pe_base, 1),
+            "implied_pe_bull": round(pe_bull, 1),
+            "bear": round(norm_eps * pe_bear, 2),
+            "base": round(norm_eps * pe_base, 2),
+            "bull": round(norm_eps * pe_bull, 2),
             "current_peg": round(current_peg, 2) if current_peg else None,
             "peg_interpretation": (
                 "Undervalued (PEG < 1)" if current_peg and current_peg < 1 else
@@ -343,7 +370,7 @@ class ValuationEngine:
             "applicable": True,
         }
 
-    # ── Method 6: EPV ─────────────────────────────────────────────────────────
+    # ── Method 5: EPV ─────────────────────────────────────────────────────────
 
     def _epv(self, latest_eps_total_cr: float, r: float, shares_cr: float) -> dict:
         def per_share(r_pct: float) -> Optional[float]:

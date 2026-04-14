@@ -264,7 +264,34 @@ class ScreenerClawPipeline:
             extra={"ticker": ticker, "stock_type": stock_type, "methods": recommended_methods},
         )
         try:
+            # Inject stock_type so the assumptions agent can apply the correct
+            # EPS normalization method (secular growth vs cyclical).
+            raw_data["_stock_type"] = stock_type
             assumptions = await self._safe(self.assumptions_agent.derive(raw_data), "assumptions")
+
+            # Override required_return_r with stock-type appropriate WACC when the LLM
+            # is too conservative. Moat businesses (exchanges, depositories, quality
+            # compounders) have more predictable cash flows → lower discount rate.
+            from backend.valuation.classifier import get_wacc as _get_type_wacc
+            type_wacc_pct = round(_get_type_wacc(stock_type, raw_data.get("sector", "")) * 100, 1)
+            llm_r = float((assumptions.get("required_return_r") or {}).get("value") or 13)
+            if llm_r > type_wacc_pct + 1.5:
+                logger.info(
+                    "Required return overridden by stock-type WACC",
+                    extra={
+                        "ticker": ticker,
+                        "stock_type": stock_type,
+                        "llm_r_pct": llm_r,
+                        "type_wacc_pct": type_wacc_pct,
+                    },
+                )
+                assumptions.setdefault("required_return_r", {})
+                assumptions["required_return_r"]["value"] = type_wacc_pct
+                assumptions["required_return_r"]["rationale"] = (
+                    f"Overridden from LLM {llm_r}% to {stock_type} sector WACC "
+                    f"{type_wacc_pct}% — moat/stability justifies lower discount rate"
+                )
+
             valuations = self.valuation_engine.compute(raw_data, assumptions, methods=recommended_methods)
             valuation_table = self.valuation_engine.build_table(
                 valuations, raw_data.get("current_price") or 0
@@ -280,7 +307,7 @@ class ScreenerClawPipeline:
             valuation_table = []
 
         # Compute MOS prices from table
-        mos_prices = self._compute_mos_prices(valuation_table, mos_pct)
+        mos_prices = self._compute_mos_prices(valuation_table, mos_pct, stock_type=stock_type)
 
         # ── Step 5: Composite Scoring ─────────────────────────────────────────
         logger.info("Step 5 starting", extra={"ticker": ticker, "step": "scoring"})
@@ -388,17 +415,41 @@ class ScreenerClawPipeline:
             return {}
 
     def _compute_mos_prices(
-        self, valuation_table: list[dict], mos_pct: float
+        self, valuation_table: list[dict], mos_pct: float, stock_type: str = "UNKNOWN"
     ) -> dict[str, float]:
-        """Compute margin-of-safety buy prices from valuation table."""
+        """
+        Compute margin-of-safety buy prices from valuation table.
+
+        For quality moat businesses (CAPITAL_MARKETS, QUALITY_COMPOUNDER, GROWTH):
+        EPV / Greenwald EPV rows are no-growth floor values, not fair-value estimates.
+        Including them in the median systematically understates intrinsic value for
+        businesses that derive most of their value from future growth and franchise
+        durability. They are still shown in the table for reference, but excluded
+        from the bear/base/bull percentile calculation.
+        """
         if not valuation_table:
             return {}
+
+        # Stock types for which EPV is a floor check, not a valuation
+        EXCLUDE_EPV_FOR = {"CAPITAL_MARKETS", "QUALITY_COMPOUNDER", "GROWTH"}
+
+        def _is_no_growth_anchor(row: dict) -> bool:
+            method = row.get("method", "")
+            return "EPV" in method and stock_type in EXCLUDE_EPV_FOR
 
         values = [
             r["value_per_share"]
             for r in valuation_table
             if r.get("value_per_share") and r["value_per_share"] > 0
+            and not _is_no_growth_anchor(r)
         ]
+        if not values:
+            # Fallback — include everything if non-EPV rows produced no values
+            values = [
+                r["value_per_share"]
+                for r in valuation_table
+                if r.get("value_per_share") and r["value_per_share"] > 0
+            ]
         if not values:
             return {}
 

@@ -95,15 +95,68 @@ For CONGLOMERATE stock types, populate sotp_segments with best-estimate segment 
 financial data and web research provided. Use the business description, annual report excerpts,
 and peer data to estimate segment EBITDA. This is the PRIMARY valuation input for conglomerates.
 
-REASONING RULES:
-- Cyclical companies: use mid-cycle normalized EPS, NOT peak EPS
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+STEP 0 — CLASSIFY BUSINESS TYPE BEFORE DOING ANYTHING ELSE
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+A "Stock Type" hint is provided in the data. Use it, and confirm with the financials.
+
+┌─ SECULAR GROWTH — set is_cyclical=false ────────────────────┐
+│ Identify when ANY TWO of the following are true:             │
+│  (a) Stock Type is: CAPITAL_MARKETS, QUALITY_COMPOUNDER,    │
+│      GROWTH, or FINANCIAL (non-bank)                         │
+│  (b) Profit CAGR 5yr > 15% AND relatively consistent         │
+│      (not alternating boom/bust)                             │
+│  (c) ROCE consistently > 20% for last 3+ years              │
+│  (d) Asset-light / franchise model: software, brands,        │
+│      regulatory licence, network effects                     │
+│  (e) Sector: IT Services, Capital Markets, FMCG, Pharma,    │
+│      Insurance, Healthcare, Specialty Chemicals (niche),     │
+│      Financial Services, Asset Management                    │
+│                                                              │
+│ NORMALIZATION RULE:                                          │
+│   normalized_eps = average of last 2-3 ANNUAL EPS years     │
+│   HARD FLOOR: normalized_eps ≥ 75% of TTM EPS               │
+│   NEVER use 5yr or 10yr backward average — secular growth   │
+│   companies compound; old years represent a much smaller     │
+│   business. A 10yr average for a 30% CAGR compounder gives  │
+│   a figure 5-7x below today's true earning power.           │
+└──────────────────────────────────────────────────────────────┘
+
+┌─ CYCLICAL — set is_cyclical=true ───────────────────────────┐
+│ Identify when ANY ONE is true:                               │
+│  (a) Sector: Metals & Mining, Steel, Aluminium, Coal,        │
+│      Cement, Oil & Gas (upstream/refining), Commodity        │
+│      Chemicals, Shipping, Airlines, Power (merchant)         │
+│  (b) EPS swings > 50% between adjacent years regularly      │
+│      (e.g. EPS goes 50 → 10 → 80 in consecutive years)     │
+│  (c) Revenue/margins directly driven by commodity prices     │
+│  (d) ROCE < 10% in any of the last 5 years (down-cycle)     │
+│                                                              │
+│ NORMALIZATION RULE:                                          │
+│   normalized_eps = 5yr or 10yr average/median (mid-cycle)   │
+│   NEVER use peak-cycle EPS — overvalues by 3-5×             │
+│   Use the trough year + peak year average as a sanity check  │
+└──────────────────────────────────────────────────────────────┘
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+REMAINING RULES (apply after classifying business type)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 - High-ROCE businesses (ROCE > 20%): Greenwald growth model most relevant
 - DDM applicable only if dividend payout consistently > 20%
 - Negative earnings: EPV and Graham may not apply (set to false)
 - Graham number needs EPS > 0 and Book Value > 0
 - risk_free_rate_y is ALWAYS 7 (India 10yr G-Sec)
-- required_return_r: 10-12% for large stable; 13-15% for mid/small; 15-18% for risky
-- Growth rate G must be < R (required return) — cap G at R minus 1%
+- required_return_r guidance:
+    10-11%  → Regulated monopoly/duopoly with predictable cash flows
+              (exchanges, depositories, NSDL/CDSL, power transmission, toll roads)
+    11-12%  → Large, stable, quality compounder (top FMCG, IT majors, large private banks)
+    12-13%  → Mid-large quality but with competitive or regulatory risk
+    13-15%  → Mid/small cap or businesses with earnings volatility
+    15-18%  → Early-stage, high-risk, turnaround, or distressed
+- Growth rate G in growth_scenarios = EXPECTED 5-year EPS CAGR.
+  G CAN legally exceed required_return_r — this is mathematically valid in a
+  multi-stage DCF where G is stage-1 growth, not terminal growth.
+  DO NOT cap G at (r - 1). That restriction applies ONLY to perpetuity/terminal growth.
 - shares_outstanding_cr: derive from market_cap / current_price if not directly available"""
 
 
@@ -112,15 +165,17 @@ def _make_financial_summary(data: dict) -> str:
     lines = []
 
     name = data.get("company_name") or data.get("symbol", "Unknown")
+    stock_type_hint = data.get("_stock_type", "UNKNOWN")
     lines.append(f"Company: {name} ({data.get('symbol', '')})")
+    lines.append(f"Stock Type (classifier): {stock_type_hint}")
     lines.append(f"Sector: {data.get('sector')} | Industry: {data.get('industry')}")
-    lines.append(f"Current Price: ₹{data.get('current_price')}")
-    lines.append(f"Market Cap: ₹{data.get('market_cap')} Cr")
+    lines.append(f"Current Price: Rs{data.get('current_price')}")
+    lines.append(f"Market Cap: Rs{data.get('market_cap')} Cr")
     lines.append(f"Stock P/E: {data.get('pe')} | P/B: {data.get('pb')}")
-    lines.append(f"Book Value: ₹{data.get('book_value')} | EPS (TTM): ₹{data.get('eps_ttm')}")
+    lines.append(f"Book Value: Rs{data.get('book_value')} | EPS (TTM): Rs{data.get('eps_ttm')}")
     lines.append(f"ROCE: {data.get('roce')}% | ROE: {data.get('roe')}%")
     lines.append(f"Dividend Yield: {data.get('dividend_yield')}%")
-    lines.append(f"Face Value: ₹{data.get('face_value')}")
+    lines.append(f"Face Value: Rs{data.get('face_value')}")
     lines.append("")
 
     # P&L history (last 10 years)
@@ -350,14 +405,17 @@ def _validate_assumptions(result: dict, data: dict) -> dict:
     elif not r.get("value"):
         result["required_return_r"]["value"] = 12
 
-    # Cap growth rates at R - 1
-    r_val = result.get("required_return_r", {}).get("value", 12)
+    # Sanity-cap growth rates at 45% max to catch LLM hallucinations.
+    # Stage-1 growth CAN legally exceed WACC in a multi-stage DCF — the
+    # r > g restriction applies only to the terminal (perpetuity) growth rate,
+    # which is already hard-coded at 6% in INDIA_PARAMS. Capping stage-1 at
+    # (r-1) was wrong and severely undervalued high-growth moat businesses.
     gs = result.get("growth_scenarios", {})
     for scenario in ("bear", "base", "bull"):
         s = gs.get(scenario, {})
         if isinstance(s, dict) and s.get("g"):
-            if s["g"] >= r_val:
-                s["g"] = r_val - 1
+            if s["g"] > 45:
+                s["g"] = 45
 
     # Default EPS if missing
     ne = result.get("normalized_eps", {})
@@ -365,6 +423,111 @@ def _validate_assumptions(result: dict, data: dict) -> dict:
         result["normalized_eps"] = {"method": "TTM", "value": eps, "rationale": "TTM EPS"}
     elif not ne.get("value"):
         result["normalized_eps"]["value"] = eps
+
+    # ── Secular-growth EPS floor guard ──────────────────────────────────────
+    # Prevent the LLM from using multi-year historical averages for compounders.
+    # A 10yr backward average for a 20-30% CAGR business gives an EPS figure
+    # 5-7× below today's earning power — producing nonsensically low valuations.
+    #
+    # The guard fires if EITHER:
+    #   (a) LLM said is_cyclical=False, OR
+    #   (b) Quantitative signals override: ROCE > 20% AND profit CAGR 5yr > 15%
+    #       (these criteria identify secular compounders objectively, regardless
+    #        of whether the LLM correctly classified cyclicality)
+
+    ne_val = float((result.get("normalized_eps") or {}).get("value") or 0)
+    is_cyclical_llm = result.get("is_cyclical", False)
+
+    # Quantitative secular-growth override
+    roce_val = float(data.get("roce") or 0)
+    pc = data.get("profit_growth_cagr", {})
+    profit_cagr_5yr = float(pc.get("5_years") or pc.get("5yr") or 0)
+    profit_cagr_3yr = float(pc.get("3_years") or pc.get("3yr") or 0)
+    is_quantitative_compounder = (
+        roce_val > 20 and (profit_cagr_5yr > 15 or profit_cagr_3yr > 15)
+    )
+
+    # Stock-type hint from pipeline (set by classifier)
+    stock_type_hint = data.get("_stock_type", "UNKNOWN")
+    secular_types = {
+        "CAPITAL_MARKETS", "QUALITY_COMPOUNDER", "GROWTH",
+        "FINANCIAL",  # non-bank financial services compound consistently
+    }
+    is_secular_type = stock_type_hint in secular_types
+
+    is_secular_growth = (
+        not is_cyclical_llm
+        or is_quantitative_compounder
+        or is_secular_type
+    )
+
+    if is_secular_growth and float(eps) > 0 and ne_val > 0:
+        # Compute annual EPS history (exclude TTM row)
+        eps_hist = [
+            x for x in data.get("pl_eps", [])
+            if isinstance(x, dict) and str(x.get("year", "")).upper() != "TTM"
+        ]
+        # Best floor: most recent annual EPS × 0.80 — allows at most 20% normalisation
+        # discount, which covers genuine one-off distortions without masking growth.
+        latest_annual_eps = None
+        for x in reversed(eps_hist):
+            try:
+                v = float(x["value"])
+                if v > 0:
+                    latest_annual_eps = v
+                    break
+            except (TypeError, ValueError):
+                pass
+
+        # Compute 3yr avg for extra context
+        eps_recent_vals = []
+        for x in eps_hist[-3:]:
+            try:
+                v = float(x["value"])
+                if v > 0:
+                    eps_recent_vals.append(v)
+            except (TypeError, ValueError):
+                pass
+        eps_3yr_avg = (
+            sum(eps_recent_vals) / len(eps_recent_vals)
+            if eps_recent_vals else float(eps)
+        )
+
+        # Floor = max(80% of latest annual, 75% of TTM)
+        # The latest annual EPS is the most relevant "earning power" anchor.
+        ttm_eps = float(eps)
+        eps_floor = max(
+            (latest_annual_eps * 0.80) if latest_annual_eps else 0,
+            ttm_eps * 0.75,
+        )
+
+        if ne_val < eps_floor:
+            old_val = ne_val
+            reason = (
+                "quantitative compounder (ROCE>{:.0f}%, profit CAGR {}%)".format(
+                    roce_val,
+                    max(profit_cagr_5yr, profit_cagr_3yr),
+                )
+                if is_quantitative_compounder and is_cyclical_llm
+                else "secular growth type ({})".format(stock_type_hint)
+            )
+            result["normalized_eps"]["value"] = round(eps_floor, 2)
+            result["normalized_eps"]["method"] = (
+                "Auto-corrected for secular growth: floor=max("
+                "latest_annual Rs{:.2f}x0.80, TTM Rs{:.2f}x0.75) "
+                "[LLM returned Rs{:.2f}]".format(
+                    latest_annual_eps or 0, ttm_eps, old_val
+                )
+            )
+            result.setdefault("key_assumptions_warning", [])
+            result["key_assumptions_warning"].append(
+                "norm_eps auto-corrected Rs{:.2f} -> Rs{:.2f}: "
+                "LLM used historical avg for {} business "
+                "(latest_annual Rs{:.2f}, 3yr_avg Rs{:.2f}, TTM Rs{:.2f})".format(
+                    old_val, eps_floor, reason,
+                    latest_annual_eps or 0, eps_3yr_avg, ttm_eps
+                )
+            )
 
     # Default capital per share
     if not result.get("capital_invested_per_share"):

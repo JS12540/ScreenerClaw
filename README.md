@@ -136,7 +136,29 @@ Adaptive by stock type — cyclicals get Graham Formula + DCF, compounders get D
 
 `dcf_eps` · `dcf_fcf` · `graham_formula` · `pe_based` · `epv` · `ddm` · `reverse_dcf` · `greenwald_growth` · **`sotp`** (conglomerates only)
 
-**Stock types:** QUALITY_COMPOUNDER · CYCLICAL · FINANCIAL · INFRASTRUCTURE · REAL_ASSET · GROWTH · DIVIDEND_YIELD · **CONGLOMERATE**
+**Stock types:** QUALITY_COMPOUNDER · CYCLICAL · CAPITAL_MARKETS · FINANCIAL · INFRASTRUCTURE · REAL_ASSET · GROWTH · DIVIDEND_YIELD · **CONGLOMERATE**
+
+**Methods by stock type:**
+
+| Stock Type | Methods applied |
+|-----------|----------------|
+| QUALITY_COMPOUNDER | greenwald_growth, dcf_eps, dcf_fcf, epv, pe_based, reverse_dcf |
+| CAPITAL_MARKETS | dcf_eps, pe_based, greenwald_growth, epv, reverse_dcf |
+| FINANCIAL | ddm, pe_based, epv, reverse_dcf |
+| GROWTH | greenwald_growth, reverse_dcf, pe_based, epv |
+| CYCLICAL | graham_formula, pe_based, reverse_dcf, dcf_eps |
+| DIVIDEND_YIELD | ddm, pe_based, dcf_eps, reverse_dcf |
+| INFRASTRUCTURE | dcf_fcf, epv, reverse_dcf, pe_based |
+| REAL_ASSET | pe_based, graham_formula, reverse_dcf, dcf_fcf |
+| CONGLOMERATE | sotp, reverse_dcf |
+
+**Valuation engine improvements (professional-grade accuracy):**
+
+- **ROCE-aware PE tiers** — PE multiples scale with capital efficiency. ROCE ≥ 30% (moat): Bear 35×, Base up to 80×, Bull up to 100×. ROCE ≥ 20% (quality): Bear 25×, Base up to 60×. Below 20%: Graham formula floor.
+- **Multi-stage DCF (corrected)** — Stage-1 growth rate `G` is legally allowed to exceed the discount rate `R`. The old cap `G < R` was wrong; it is only terminal/perpetuity growth that must satisfy `g < r`. Stage-1 G in `growth_scenarios` represents the 5-year EPS CAGR and is uncapped.
+- **Secular vs cyclical EPS normalization** — secular compounders (ROCE > 20%, profit CAGR > 15%, or type in {CAPITAL_MARKETS, QUALITY_COMPOUNDER, GROWTH, FINANCIAL}) use average of last 2–3 annual EPS years with a hard floor of `max(latest_annual × 0.80, TTM × 0.75)`. Cyclicals (metals, cement, O&G, shipping, airlines) use a 5–10yr mid-cycle average.
+- **Stock-type WACC override** — after the LLM derives `required_return_r`, the pipeline checks whether it exceeds the stock-type WACC ceiling by more than 1.5pp and caps it. Regulated moats (CAPITAL_MARKETS) → 10.5%, quality compounders → 11%, financials → 11%.
+- **EPV excluded from median for moat/growth types** — EPV is a no-growth floor/sanity check, not a fair value for compounders. For CAPITAL_MARKETS, QUALITY_COMPOUNDER, and GROWTH types, EPV rows are excluded from the P25/P50/P75 median calculation that drives `base_intrinsic`.
 
 #### SOTP Valuation (Method 13 — Conglomerates only)
 

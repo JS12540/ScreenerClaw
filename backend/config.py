@@ -73,6 +73,8 @@ INDIA_PARAMS = {
     "aaa_bond_yield":           0.075,   # For Graham Formula denominator
 
     "sector_wacc": {
+        "Capital Markets":       0.105,   # Exchanges, depositories — regulated near-monopoly
+        "Financial Services":    0.110,   # Diversified financial services
         "Private Banking":       0.115,
         "FMCG":                  0.110,
         "IT Services":           0.120,
@@ -86,6 +88,7 @@ INDIA_PARAMS = {
     },
 
     "sector_margin_of_safety": {
+        "Capital Markets":       0.25,   # Quality moat — high premium, moderate discount needed
         "FMCG":                  0.20,
         "IT Services":           0.20,
         "Private Banking":       0.25,
@@ -108,6 +111,12 @@ STOCK_TYPES = {
     "CYCLICAL":            [
         "Metals & Mining", "Cement", "Commodity Chemicals",
         "Capital Goods", "Textile",
+    ],
+    "CAPITAL_MARKETS":     [
+        # Exchanges, depositories, AMCs, brokers, rating agencies, registrars
+        "Capital Markets", "Stock Exchange", "Depository",
+        "Asset Management", "Wealth Management", "Stockbroking",
+        "Credit Rating", "Portfolio Management",
     ],
     "FINANCIAL":           [
         "Banks", "Private Banking", "PSU Banks", "NBFCs",
@@ -135,8 +144,12 @@ VALUATION_METHODS_BY_TYPE = {
     "CYCLICAL": [
         "graham_formula", "pe_based", "reverse_dcf", "dcf_eps",
     ],
+    "CAPITAL_MARKETS": [
+        # Asset-light moat businesses: DCF + ROCE-aware PE + Greenwald are most reliable
+        "dcf_eps", "pe_based", "greenwald_growth", "epv", "reverse_dcf",
+    ],
     "FINANCIAL": [
-        "pb_roe", "ddm", "pe_based", "reverse_dcf",
+        "ddm", "pe_based", "epv", "reverse_dcf",
     ],
     "INFRASTRUCTURE": [
         "dcf_fcf", "epv", "reverse_dcf", "pe_based",

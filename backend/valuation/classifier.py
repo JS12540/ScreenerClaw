@@ -44,6 +44,30 @@ def classify_stock_type(raw_data: dict) -> str:
     if symbol in known_conglomerates:
         return "CONGLOMERATE"
 
+    # ── Capital Markets detection (must run before the general FINANCIAL check) ─
+    # Covers: depositories (CDSL, NSDL), exchanges (BSE, MCX, IEX),
+    # AMCs/registrars (CAMS, KFintech), rating agencies (CRISIL, ICRA, CARE),
+    # wealth managers/brokers (360ONE, Nuvama, Iifl Securities).
+    # These are asset-light, high-ROCE moat businesses and need different
+    # valuation treatment from banks/NBFCs (which stay in FINANCIAL).
+    known_capital_markets = {
+        "CDSL", "BSE", "MCX", "IEX", "CAMS", "KFINTECH",
+        "CRISIL", "ICRA", "CARERATING", "CARERATINGS",
+        "360ONE", "NUVAMA", "IIFLSEC", "ANAND", "FINEORG",
+        "MCSHL", "NSEINDIA", "NSDL",
+    }
+    capital_markets_keywords = [
+        "depository", "stock exchange", "capital market",
+        "asset management", "mutual fund", "registrar and transfer",
+        "credit rating", "wealth management", "stockbroking",
+        "commodity exchange", "power exchange",
+    ]
+    if symbol in known_capital_markets or any(
+        kw in combined or kw in about[:400]
+        for kw in capital_markets_keywords
+    ):
+        return "CAPITAL_MARKETS"
+
     # Check each type's sector list
     for stock_type, sectors in STOCK_TYPES.items():
         for s in sectors:
@@ -112,6 +136,7 @@ def get_margin_of_safety(stock_type: str, sector: str) -> float:
     # Type-based defaults
     type_defaults = {
         "QUALITY_COMPOUNDER": 0.25,
+        "CAPITAL_MARKETS":    0.25,   # Quality moat but premium priced — 25% MoS
         "CYCLICAL":           0.35,
         "FINANCIAL":          0.25,
         "INFRASTRUCTURE":     0.30,
@@ -135,6 +160,7 @@ def get_wacc(stock_type: str, sector: str) -> float:
 
     type_defaults = {
         "QUALITY_COMPOUNDER": 0.130,
+        "CAPITAL_MARKETS":    0.105,   # Regulatory moat = lower risk = lower discount rate
         "CYCLICAL":           0.145,
         "FINANCIAL":          0.115,
         "INFRASTRUCTURE":     0.140,

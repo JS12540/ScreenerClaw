@@ -65,10 +65,9 @@ class WebSearchClient:
         from backend.config import settings
         self._settings = settings
 
-    # OpenAI web search disabled — uncomment to re-enable (requires openai package + OPENAI_API_KEY)
-    # @property
-    # def _has_openai(self) -> bool:
-    #     return bool(self._settings.openai_api_key)
+    @property
+    def _has_openai(self) -> bool:
+        return bool(self._settings.openai_api_key)
 
     @property
     def _has_groq(self) -> bool:
@@ -89,9 +88,9 @@ class WebSearchClient:
         t0 = time.monotonic()
         tasks: list[asyncio.Task] = []
 
-        # OpenAI web search disabled — uncomment to re-enable
-        # if self._has_openai:
-        #     tasks.append(asyncio.create_task(self._openai_search(query)))
+        # OpenAI web search
+        if self._has_openai:
+            tasks.append(asyncio.create_task(self._openai_search(query)))
         if self._has_groq:
             tasks.append(asyncio.create_task(self._groq_search(query)))
         tasks.append(asyncio.create_task(self._ddg_search(query, num_results)))
@@ -222,33 +221,31 @@ class WebSearchClient:
         return "\n".join(blocks)
 
     # ── OpenAI Responses API ──────────────────────────────────────────────────
-    # OpenAI web search disabled — uncomment to re-enable (requires openai package + OPENAI_API_KEY)
-
-    # async def _openai_search(self, query: str) -> list[SearchResult]:
-    #     import openai as _openai
-    #
-    #     client = _openai.AsyncOpenAI(api_key=self._settings.openai_api_key)
-    #     model = self._settings.execution_model or "gpt-4.1-mini"
-    #
-    #     logger.debug("OpenAI web search", extra={"query": query[:60], "model": model})
-    #
-    #     response = await client.responses.create(
-    #         model=model,
-    #         tools=[{"type": "web_search_preview"}],
-    #         input=query,
-    #     )
-    #
-    #     content = response.output_text or ""
-    #     if not content:
-    #         raise ValueError("OpenAI Responses API returned empty content")
-    #
-    #     return [SearchResult(
-    #         title=f"Web search: {query[:80]}",
-    #         url="",
-    #         content=content,
-    #         score=1.0,
-    #         source="openai",
-    #     )]
+    async def _openai_search(self, query: str) -> list[SearchResult]:
+        import openai as _openai
+    
+        client = _openai.AsyncOpenAI(api_key=self._settings.openai_api_key)
+        model = self._settings.execution_model or "gpt-4.1-mini"
+    
+        logger.debug("OpenAI web search", extra={"query": query[:60], "model": model})
+    
+        response = await client.responses.create(
+            model=model,
+            tools=[{"type": "web_search_preview"}],
+            input=query,
+        )
+    
+        content = response.output_text or ""
+        if not content:
+            raise ValueError("OpenAI Responses API returned empty content")
+    
+        return [SearchResult(
+            title=f"Web search: {query[:80]}",
+            url="",
+            content=content,
+            score=1.0,
+            source="openai",
+        )]
 
     # ── Groq Compound ─────────────────────────────────────────────────────────
 
